@@ -1,12 +1,12 @@
 # Alternative Data Platform
 
-Phase 1 is a small, reliable ingestion foundation for public alternative and macroeconomic data. It currently ingests U.S. annual real GDP from the no-authentication [World Bank Indicators API](https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api).
+Phase 1 is a small, reliable ingestion foundation for public alternative and macroeconomic data. Phase 2 adds normalized transportation metadata and a live Travel Midwest / IDOT Gateway camera feed.
 
 It deliberately does **not** include computer vision, forecasting, trading, or a dashboard.
 
 ## Architecture
 
-`World Bank API -> WorldBankGdpIngestor -> validation/transformation -> PostgreSQL`
+`Public API/feed -> ingestor -> validation/transformation -> PostgreSQL`
 
 Each execution records a source-specific `ingestion_run`, metadata plus a bounded raw response in `raw_payloads`, and normalized values in `economic_indicators`. All system timestamps are UTC. The `published_at`, `observed_at`, and `retrieved_at` fields distinguish source availability, the event period, and our receipt time to support later look-ahead-bias controls.
 
@@ -17,10 +17,11 @@ Each execution records a source-specific `ingestion_run`, metadata plus a bounde
 - `raw_payloads`: response metadata and optional bounded payload; external object paths are ready for images/large files.
 - `economic_indicators`: normalized observations, unique by source/indicator/geography/period.
 - `camera_locations`, `traffic_camera_observations`, `roadway_sensor_observations`, `weather_observations`, and `market_prices`: initial extensibility tables.
+- `transportation_sources`, `traffic_cameras`, `camera_snapshots`, `traffic_sensors`, `traffic_observations`, `transportation_incidents`, and `construction_events`: Phase 2 transportation tables.
 
 ## Prerequisites and database
 
-Install Python 3.11+ and PostgreSQL 15+ (or Docker). Copy the environment template and set a password:
+Install Python 3.11+ and Docker Desktop (or PostgreSQL 15+). Copy the environment template and set a password:
 
 ```powershell
 Copy-Item .env.example .env
@@ -43,10 +44,38 @@ alembic upgrade head
 ```powershell
 python -m scripts.ingest_world_bank_gdp
 python -m scripts.verify_data
-pytest
+python -m pytest -q -p no:cacheprovider
 ```
 
 The run should report one successful ingestion run, one raw payload record, and approximately 60+ annual GDP observations (the exact count can change with upstream revisions). Run the command again: it should complete successfully and report existing observations as skipped, without duplicates.
+
+## Phase 2: Chicago transportation ingestion
+
+The transportation layer adds provider-neutral tables for `transportation_sources`, `traffic_cameras`, `camera_snapshots`, `traffic_sensors`, `traffic_observations`, `transportation_incidents`, and `construction_events`. Source timestamps, publication timestamps, and retrieval timestamps are separate UTC fields where the feed supplies them. Camera image bytes are intentionally not stored in PostgreSQL; `camera_snapshots.storage_path` is reserved for files under `CAMERA_STORAGE_PATH`.
+
+Travel Midwest / IDOT Gateway is the primary Chicago live source. Registration is required for its XML and image feeds. Configure the returned credentials in `.env`; never commit them. The public camera metadata CSV endpoint is `https://travelmidwest.com/lmiga/cameraInfo.csv`. The IDOT reuse policy requires each XML feed and individual camera image to be requested no more than once every five minutes and requires attribution: “Gateway traffic information courtesy of the Illinois Department of Transportation.” The client enforces a process-level five-minute minimum interval, uses bounded retries, and refuses to run without a configured feed URL.
+
+After registering, set `TRAVEL_MIDWEST_CAMERA_FEED_URL=https://travelmidwest.com/lmiga/cameraInfo.csv` in `.env` and run:
+
+```powershell
+python -m scripts.ingest_travel_midwest_cameras
+```
+
+The camera CSV's supported `SnapShot` field is stored as `traffic_cameras.image_url`; `ImgPath` is intentionally ignored because Travel Midwest deprecated it. `WarningAge`, `TooOld`, `AgeInMinutes`, and `VideoUrl` are preserved as metadata. Normal tests use XML and CSV fixtures and never call Travel Midwest. Before live use, confirm the registration-provided endpoint and field names against the supplied documentation. Example DBeaver queries:
+
+```sql
+SELECT COUNT(*) AS camera_count FROM public.traffic_cameras;
+SELECT external_camera_id, name, direction, latitude, longitude, image_url
+FROM public.traffic_cameras ORDER BY name, direction LIMIT 20;
+SELECT status, rows_received, rows_inserted, rows_skipped, error_message
+FROM public.ingestion_runs ORDER BY started_at DESC LIMIT 5;
+```
+
+The City of Chicago Open Data portal may supplement this source for historical or enforcement-camera metadata, but it is not a substitute for live IDOT monitoring cameras. Live camera images remain subject to provider permissions, rate limits, and storage policy.
+
+## Current status
+
+Phase 1 is complete. Phase 2 code, migrations, parser fixtures, and tests are ready. The remaining gate is one successful live camera ingestion followed by verification in DBeaver; camera image download/storage and computer vision are intentionally deferred to Phase 3.
 
 ## Next step
 

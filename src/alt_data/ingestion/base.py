@@ -43,6 +43,9 @@ class BaseIngestor(ABC):
         run = IngestionRun(source_id=source.id, started_at=datetime.now(timezone.utc), status="running")
         self.session.add(run)
         self.session.flush()
+        # Persist the run before the network call so failures can be recorded
+        # even when fetching raises before any payload is available.
+        self.session.commit()
         try:
             url, status, content_type, raw, payload = self.fetch()
             retrieved_at = datetime.now(timezone.utc)
@@ -60,6 +63,8 @@ class BaseIngestor(ABC):
         except Exception as exc:
             self.session.rollback()
             run = self.session.get(IngestionRun, run.id)
+            if run is None:
+                raise RuntimeError("Ingestion run disappeared while recording failure") from exc
             run.status, run.error_message, run.finished_at = "failed", str(exc), datetime.now(timezone.utc)
             self.session.commit()
             logger.exception("Ingestion failed: source=%s run_id=%s", self.source_name, run.id)

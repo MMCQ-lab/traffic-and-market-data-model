@@ -11,6 +11,15 @@ class Settings(BaseSettings):
     database_url: str | None = None
     log_level: str = "INFO"
     raw_payload_max_bytes: int = 1_048_576
+    travel_midwest_username: str | None = None
+    travel_midwest_password: str | None = None
+    travel_midwest_traffic_feed_url: str | None = None
+    travel_midwest_camera_feed_url: str | None = None
+    travel_midwest_incident_feed_url: str | None = None
+    travel_midwest_construction_feed_url: str | None = None
+    travel_midwest_sensor_feed_url: str | None = None
+    camera_storage_path: str = "data/cameras"
+    travel_midwest_min_interval_seconds: int = 300
 
     @property
     def resolved_database_url(self) -> str:
