@@ -1,5 +1,7 @@
 # Alternative Data Platform
 
+For a running project journal, current milestones, learned setup notes, and the server workflow, see [Project Notes](docs/PROJECT_NOTES.md).
+
 Phase 1 is a small, reliable ingestion foundation for public alternative and macroeconomic data. Phase 2 adds normalized transportation metadata and a live Travel Midwest / IDOT Gateway camera feed.
 
 It deliberately does **not** include computer vision, forecasting, trading, or a dashboard.
@@ -75,7 +77,7 @@ The City of Chicago Open Data portal may supplement this source for historical o
 
 ## Current status
 
-Phase 1 is complete. Phase 2 code, migrations, parser fixtures, and tests are ready. The remaining gate is one successful live camera ingestion followed by verification in DBeaver; camera image download/storage and computer vision are intentionally deferred to Phase 3.
+Phases 1 and 2 are complete. Phase 3A has loaded the initial market universe on the Ubuntu server. Camera image download/storage and computer vision remain intentionally deferred; weather ingestion and point-in-time temporal joins are the next data milestones.
 
 ## Linux server operation
 
