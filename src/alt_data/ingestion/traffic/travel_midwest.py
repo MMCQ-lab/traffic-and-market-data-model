@@ -37,25 +37,17 @@ class TravelMidwestClient:
                 raise RuntimeError(f"Travel Midwest rate limit: retry in {self.min_interval - elapsed:.0f}s")
             self._last_request[url] = time.monotonic()
         headers = {"User-Agent": "alternative-data-platform/0.1 (registered research client)"}
-        last_error: Exception | None = None
         with httpx.Client(timeout=30.0, headers=headers) as client:
             if self.username and self.password:
                 login = client.post("https://travelmidwest.com/lmiga/user/login.json", json={"username": self.username, "password": self.password})
                 login.raise_for_status()
-            for attempt in range(3):
-                try:
-                    response = client.get(url)
-                    if response.status_code == 429 or response.status_code >= 500:
-                        response.raise_for_status()
-                    response.raise_for_status()
-                    logger.info("Travel Midwest request succeeded: status=%s url=%s", response.status_code, url)
-                    return response.status_code, response.text, response.content, response.headers.get("content-type")
-                except httpx.HTTPError as exc:
-                    last_error = exc
-                    logger.warning("Travel Midwest request failed (attempt %s/3): %s", attempt + 1, exc)
-                    if attempt < 2:
-                        time.sleep(2**attempt)
-        raise RuntimeError(f"Travel Midwest request failed: {last_error}") from last_error
+            # Travel Midwest permits an XML/CSV feed request no more than once
+            # every five minutes. A transport retry may still reach the source,
+            # so record the failure and let the scheduler make the next attempt.
+            response = client.get(url)
+            response.raise_for_status()
+            logger.info("Travel Midwest request succeeded: status=%s url=%s", response.status_code, url)
+            return response.status_code, response.text, response.content, response.headers.get("content-type")
 
 
 def _value(element: ET.Element, *names: str) -> str | None:
