@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from src.alt_data.database.base import Base
 
@@ -99,13 +99,19 @@ class WeatherObservation(CreatedAt, Base):
 
 class MarketPrice(CreatedAt, Base):
     __tablename__ = "market_prices"
+    __table_args__ = (UniqueConstraint("source_id", "symbol", "observed_at", name="uq_market_price_source_symbol_time"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     source_id: Mapped[int] = mapped_column(ForeignKey("data_sources.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(String(40), nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    open: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    high: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    low: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
     close: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    adjusted_close: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 # Phase 2 transportation tables. The original placeholder camera/sensor tables

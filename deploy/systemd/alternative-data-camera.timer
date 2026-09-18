@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Travel Midwest camera ingestion every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=alternative-data-camera.service
+
+[Install]
+WantedBy=timers.target

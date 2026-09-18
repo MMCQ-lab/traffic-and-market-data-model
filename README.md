@@ -77,6 +77,38 @@ The City of Chicago Open Data portal may supplement this source for historical o
 
 Phase 1 is complete. Phase 2 code, migrations, parser fixtures, and tests are ready. The remaining gate is one successful live camera ingestion followed by verification in DBeaver; camera image download/storage and computer vision are intentionally deferred to Phase 3.
 
+## Linux server operation
+
+For a continuously running Linux-hosted PostgreSQL database and scheduled ingestion jobs, follow [the server deployment guide](deploy/README.md). The server configuration uses Docker for PostgreSQL and systemd timers for jobs; it keeps the database private to the server and does not expose credentials in Git.
+
+## Phase 3A: market data (SPY)
+
+Market ingestion is provider-isolated behind `YahooFinanceMarketIngestor`; the database stores normalized OHLCV values and never depends on Yahoo-specific objects. The initial universe is `SPY, QQQ, DIA, IWM, IYT, XLI`, plus `AMZN, UPS, FDX, WMT, TGT, COST, XPO, CHRW`, and representative airlines/transportation companies `DAL, UAL, LUV, AAL, UNP, CSX, JBHT`. Daily history begins in 2010 by default. Set `MARKET_SYMBOLS`, `MARKET_START_DATE`, or `MARKET_END_DATE` in `.env` to change the run. Yahoo Finance is a research-prototype source and may change availability or terms.
+
+After installing the updated requirements and applying migrations, run:
+
+```powershell
+pip install -r requirements.txt
+alembic upgrade head
+python -m scripts.ingest_yahoo_finance
+```
+
+Verify in DBeaver:
+
+```sql
+SELECT COUNT(*) AS price_count,
+       MIN(observed_at) AS first_date,
+       MAX(observed_at) AS last_date
+FROM public.market_prices;
+
+SELECT symbol, observed_at, open, high, low, close, adjusted_close, volume
+FROM public.market_prices
+ORDER BY observed_at DESC
+LIMIT 20;
+```
+
+Run the command a second time to confirm `rows_inserted = 0` and `rows_skipped` equals the existing history. Do not build temporal joins or predictive models until this single-instrument path is verified.
+
 ## Next step
 
 Add one operationally useful source—such as National Weather Service observations or a selected city DOT camera feed—by subclassing `BaseIngestor`, then add its migration and transformation tests.

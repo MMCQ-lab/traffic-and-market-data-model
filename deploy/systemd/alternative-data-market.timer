@@ -1,0 +1,10 @@
+[Unit]
+Description=Run market ingestion after the US market close on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 19:15:00 America/Chicago
+Persistent=true
+Unit=alternative-data-market.service
+
+[Install]
+WantedBy=timers.target

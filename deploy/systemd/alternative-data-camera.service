@@ -1,0 +1,9 @@
+[Unit]
+Description=Ingest Travel Midwest camera metadata
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/traffic-and-market-data-model
+ExecStart=/usr/bin/docker compose --env-file .env -f docker-compose.server.yml run --rm ingestor python -m scripts.ingest_travel_midwest_cameras
