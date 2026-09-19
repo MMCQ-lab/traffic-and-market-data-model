@@ -96,6 +96,8 @@ cd /opt/traffic-and-market-data-model
 git pull origin main
 docker compose --env-file .env -f docker-compose.server.yml --profile jobs build ingestor
 docker compose --env-file .env -f docker-compose.server.yml ps
+bash deploy/check-server-health.sh
+bash deploy/backup-postgres.sh
 ```
 
 ### Verify data on Ubuntu
@@ -109,7 +111,7 @@ docker compose --env-file .env -f docker-compose.server.yml exec db \
 ## Next milestones
 
 1. Enable the Ubuntu systemd timers after confirming the server has the latest code.
-2. Reboot `aliensserver` and verify Docker, PostgreSQL, and both timers resume unattended.
+2. Create a verified PostgreSQL backup, then reboot `aliensserver` and verify Docker, PostgreSQL, and both timers resume unattended.
 3. Add a weather source with source timestamps and retrieval timestamps.
 4. Design point-in-time-correct temporal joins across market, camera, and weather data.
 5. Decide whether better marginal value comes from richer transportation data, camera snapshot storage, or baseline statistical research.

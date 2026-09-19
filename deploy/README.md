@@ -58,4 +58,12 @@ Run the read-only health check after deployment or a reboot. It does not call ex
 bash deploy/check-server-health.sh
 ```
 
+Create a local, timestamped PostgreSQL backup before maintenance or a reboot. Backups remain in the server-only `backups/` directory, which Git ignores:
+
+```bash
+bash deploy/backup-postgres.sh
+```
+
+The backup script never deletes or restores database data. Restore procedures are intentionally manual because restoring overwrites a database.
+
 PostgreSQL listens only on `127.0.0.1`, not the public network. For DBeaver, use an SSH tunnel to the server rather than opening port 5432 in the firewall.
