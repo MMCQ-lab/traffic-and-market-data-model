@@ -29,12 +29,25 @@ class YahooFinanceClient:
         timestamps = result.get("timestamp", [])
         quote = result["indicators"]["quote"][0]
         adjusted = result["indicators"].get("adjclose", [{"adjclose": []}])[0].get("adjclose", [])
-        return [{
-            "observed_at": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
-            "open": quote["open"][i], "high": quote["high"][i], "low": quote["low"][i],
-            "close": quote["close"][i], "adjusted_close": adjusted[i] if i < len(adjusted) else quote["close"][i],
-            "volume": quote["volume"][i],
-        } for i, ts in enumerate(timestamps) if quote["open"][i] is not None]
+        records = []
+        for i, timestamp in enumerate(timestamps):
+            adjusted_close = adjusted[i] if i < len(adjusted) else quote["close"][i]
+            values = (
+                quote["open"][i], quote["high"][i], quote["low"][i],
+                quote["close"][i], adjusted_close, quote["volume"][i],
+            )
+            # Yahoo occasionally includes an incomplete daily bar. It cannot
+            # represent a complete OHLCV observation, so exclude it rather
+            # than failing an otherwise valid scheduled ingestion.
+            if any(value is None for value in values):
+                continue
+            records.append({
+                "observed_at": datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(),
+                "open": quote["open"][i], "high": quote["high"][i], "low": quote["low"][i],
+                "close": quote["close"][i], "adjusted_close": adjusted_close,
+                "volume": quote["volume"][i],
+            })
+        return records
 
 
 def _as_decimal(value: Any) -> Decimal:
@@ -89,6 +102,9 @@ class YahooFinanceMarketIngestor(BaseIngestor):
             raise ValueError("Unexpected Yahoo Finance response shape")
         rows = []
         for item in payload:
+            fields = ("open", "high", "low", "close", "adjusted_close", "volume")
+            if any(item.get(field) is None for field in fields):
+                continue
             rows.append({
                 "symbol": self.symbol,
                 "observed_at": datetime.fromisoformat(item["observed_at"]),
@@ -96,6 +112,8 @@ class YahooFinanceMarketIngestor(BaseIngestor):
                 "low": _as_decimal(item["low"]), "close": _as_decimal(item["close"]),
                 "adjusted_close": _as_decimal(item["adjusted_close"]), "volume": int(item["volume"]),
             })
+        if not rows:
+            raise ValueError("Yahoo Finance returned no complete daily OHLCV observations")
         return rows
 
     def save(self, source: DataSource, rows: list[dict[str, Any]], retrieved_at: datetime) -> tuple[int, int]:

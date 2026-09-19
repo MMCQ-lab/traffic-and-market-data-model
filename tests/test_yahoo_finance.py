@@ -28,6 +28,13 @@ def test_validate_normalizes_ohlcv_payload() -> None:
     assert rows[0]["volume"] == 123456
 
 
+def test_validate_skips_incomplete_daily_bar() -> None:
+    payload = [{**PAYLOAD[0], "low": None}, PAYLOAD[0]]
+    rows = YahooFinanceMarketIngestor(None, "SPY", "2025-01-01").validate(payload)
+    assert len(rows) == 1
+    assert rows[0]["low"] == Decimal("578.0")
+
+
 def test_save_is_idempotent() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
