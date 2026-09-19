@@ -14,8 +14,8 @@ Build a research-ready alternative-data platform that can eventually align trans
 | Economic data | Complete | World Bank U.S. GDP ingestion; 66 observations in the initial run |
 | Chicago transportation | Complete | Authenticated Travel Midwest camera metadata ingestion; live feed persisted in PostgreSQL |
 | Market data | Complete | 21-symbol daily OHLCV universe stored on the Ubuntu server |
-| Ubuntu hosting | Operational baseline | Docker PostgreSQL and ingestion container deployed; DBeaver connects through SSH tunneling |
-| Automatic schedules | Next operational step | Camera timer every five minutes; weekday market timer after market close |
+| Ubuntu hosting | Operational baseline | Docker PostgreSQL and ingestion container deployed; access is available over Tailscale/SSH |
+| Automatic schedules | Next operational gate | Camera metadata hourly; weekday market timer after market close; verify recovery after reboot |
 | Weather and temporal joins | Not started | Phase 4 |
 | Camera image collection / YOLO | Not started | Deferred intentionally |
 
@@ -35,7 +35,7 @@ Build a research-ready alternative-data platform that can eventually align trans
 - Preserved location, direction, latitude, longitude, snapshot URL, age flags, optional video URL, and retrieval time.
 - Ignored the deprecated `ImgPath` column; the supported `SnapShot` URL is used instead.
 - Added duplicate handling for repeated rows in one feed and across later runs.
-- Enforced the provider rule that camera metadata should be fetched no more than once every five minutes. A timeout is recorded for the next scheduled attempt rather than retried immediately.
+- Enforced the provider rule that camera metadata should be fetched no more than once every five minutes. The current metadata schedule is hourly; a timeout is recorded for the next scheduled attempt rather than retried immediately.
 - First Ubuntu server run persisted 4,568 camera records, with 119 duplicate feed rows skipped.
 
 ### Phase 3A — market data
@@ -56,25 +56,26 @@ Build a research-ready alternative-data platform that can eventually align trans
 - **Point-in-time research requires discipline:** `retrieved_at` records when the system actually received a datum. Future joins must use availability time rather than simply joining dates.
 - **Source policies matter:** documented endpoints, credentials, rate limits, and field deprecations are part of the engineering design—not paperwork to bypass.
 
-## Server workflow
+## Server and development workflow
 
 ```text
-Windows development machine
-  edit + test + git push
+Windows — aliens-laptop
+  VS Code development
+  Tailscale client
+          |
+          | encrypted Tailscale network
+          v
+Ubuntu — aliensserver
+  /opt/traffic-and-market-data-model
+  Docker
+    ├── PostgreSQL
+    └── ingestion jobs
           |
           v
-GitHub main branch
-          |
-          v
-Ubuntu server
-  git pull + rebuild ingestion image + scheduled collection
-          |
-          v
-Private PostgreSQL on Ubuntu
-          |
-          v
-DBeaver through SSH tunnel
+  persistent postgres_data volume
 ```
+
+The server is reachable through Tailscale using `ssh mmcq@aliensserver`. VS Code Remote SSH can work directly against `aliensserver` for inspection and debugging. GitHub remains the reviewed, source-controlled path for deploying code changes: develop/test, commit/push, then pull and rebuild on the server.
 
 ## Useful commands
 
@@ -108,9 +109,23 @@ docker compose --env-file .env -f docker-compose.server.yml exec db \
 ## Next milestones
 
 1. Enable the Ubuntu systemd timers after confirming the server has the latest code.
-2. Add a weather source with source timestamps and retrieval timestamps.
-3. Design point-in-time-correct temporal joins across market, camera, and weather data.
-4. Decide whether better marginal value comes from richer transportation data, camera snapshot storage, or baseline statistical research.
+2. Reboot `aliensserver` and verify Docker, PostgreSQL, and both timers resume unattended.
+3. Add a weather source with source timestamps and retrieval timestamps.
+4. Design point-in-time-correct temporal joins across market, camera, and weather data.
+5. Decide whether better marginal value comes from richer transportation data, camera snapshot storage, or baseline statistical research.
+
+## Hosting operational-completion checklist
+
+- [x] Tailscale remote access
+- [x] SSH access
+- [x] Docker installed
+- [x] PostgreSQL running in Docker
+- [x] Project deployed under `/opt/traffic-and-market-data-model`
+- [x] Historical market data loaded
+- [x] Travel Midwest camera metadata ingested
+- [ ] Camera systemd timer enabled and observed
+- [ ] Market systemd timer enabled and observed
+- [ ] Server reboot tested with services and timers resuming
 
 ## Guardrails
 

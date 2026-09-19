@@ -1,9 +1,9 @@
 [Unit]
-Description=Run Travel Midwest camera ingestion every five minutes
+Description=Run Travel Midwest camera metadata ingestion hourly
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+OnUnitActiveSec=1h
 Persistent=true
 Unit=alternative-data-camera.service
 
