@@ -52,4 +52,10 @@ sudo journalctl -u alternative-data-camera.service -n 100 --no-pager
 sudo journalctl -u alternative-data-market.service -n 100 --no-pager
 ```
 
+Run the read-only health check after deployment or a reboot. It does not call external providers:
+
+```bash
+bash deploy/check-server-health.sh
+```
+
 PostgreSQL listens only on `127.0.0.1`, not the public network. For DBeaver, use an SSH tunnel to the server rather than opening port 5432 in the firewall.
