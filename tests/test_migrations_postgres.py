@@ -192,7 +192,7 @@ def _insert_market_price(database: PostgresTestDatabase, *, open_value: str | No
 def test_empty_postgres_upgrades_from_zero_to_head_with_final_contract(postgres_database: PostgresTestDatabase) -> None:
     result = postgres_database.upgrade()
     assert result.returncode == 0, result.stderr
-    assert _current_revision(postgres_database) == "0005_reconcile_market_price_constraints"
+    assert _current_revision(postgres_database) == "0005_market_price_not_null"
     assert _required_nullability(postgres_database) == {column: "NO" for column in REQUIRED_OHLCV}
     with postgres_database.connect() as connection, connection.cursor() as cursor:
         cursor.execute("SELECT conname FROM pg_constraint WHERE conrelid = 'market_prices'::regclass AND contype = 'u'")
@@ -206,7 +206,7 @@ def test_current_0004_database_upgrades_in_place_and_preserves_rows(postgres_dat
 
     result = postgres_database.upgrade()
     assert result.returncode == 0, result.stderr
-    assert _current_revision(postgres_database) == "0005_reconcile_market_price_constraints"
+    assert _current_revision(postgres_database) == "0005_market_price_not_null"
     assert _required_nullability(postgres_database) == {column: "NO" for column in REQUIRED_OHLCV}
     with postgres_database.connect() as connection, connection.cursor() as cursor:
         cursor.execute("SELECT symbol, open, high, low, close, adjusted_close, volume FROM market_prices")

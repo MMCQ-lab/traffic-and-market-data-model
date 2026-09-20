@@ -81,7 +81,7 @@ Replace metadata-driven historical migrations with explicit Alembic DDL captured
 **Implementation evidence — 2026-09-19**
 
 - `0001_initial_schema` and `0002_transportation_schema` now use explicit `op.create_table` / `op.drop_table` operations and no longer import `Base` or application model modules.
-- `0005_reconcile_market_price_constraints` is a forward-only reconciliation migration. It verifies `market_prices` and all five required OHLCV columns exist, counts incompatible NULL rows before DDL, aborts on incompatibility, and otherwise changes only `open`, `high`, `low`, `adjusted_close`, and `volume` to `NOT NULL` in place.
+- `0005_market_price_not_null` is a forward-only reconciliation migration. It verifies `market_prices` and all five required OHLCV columns exist, counts incompatible NULL rows before DDL, aborts on incompatibility, and otherwise changes only `open`, `high`, `low`, `adjusted_close`, and `volume` to `NOT NULL` in place.
 - `tests/test_migrations_postgres.py` adds disposable-PostgreSQL tests for zero-to-head migration, `0004`-to-`0005` data preservation, safe NULL-data failure, final nullability/unique constraint checks, a future-metadata probe, and static guards against ORM-metadata imports in historical migrations.
 - Local non-Docker validation completed: migration/static tests passed as part of `11 passed, 4 skipped`. The four PostgreSQL integration tests were skipped because the local Windows workspace has no available Docker CLI/daemon. The audit score remains unchanged until those tests run successfully on a Docker-capable non-production machine.
 

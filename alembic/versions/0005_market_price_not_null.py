@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0005_reconcile_market_price_constraints"
+revision = "0005_market_price_not_null"
 down_revision = "0004_market_price_fields"
 branch_labels = None
 depends_on = None
