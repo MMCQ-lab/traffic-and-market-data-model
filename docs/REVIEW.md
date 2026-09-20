@@ -1,366 +1,231 @@
 # Quant DevOps / Production Engineering Portfolio Audit
 
-**Audit date:** 2026-09-19  
-**Scope:** Read-only review of the checked-out repository. No application code, deployment configuration, database, credentials, `.env`, or private keys were changed or read.  
-**Test evidence:** `python -m pytest -q -p no:cacheprovider` completed successfully: **9 passed in 0.99s**.
+**Audit date:** 2026-09-19
+**Scope:** Fresh read-only review of this checkout. `.env`, credentials, tokens, and private keys were not read. No application code was changed.
 
-## Executive verdict
+## Verdict
 
-**OVERALL SCORE: 5.6 / 10**  
+**OVERALL SCORE: 6.1 / 10**
 **STATUS: NOT ACCEPTABLE**
 
-The repository is a credible early-career ingestion prototype with real operational work behind it: PostgreSQL, a base ingestion lifecycle, migrations, provider adapters, systemd timers, a private production database binding, a health check, and a backup helper. Those are meaningful portfolio strengths.
+This is a credible, unusually hands-on early-career prototype: a real PostgreSQL deployment, normalized schemas, reusable ingestion lifecycle, provider adapters, systemd jobs, and an isolated PostgreSQL migration suite. It is substantially stronger than a notebook or API demo.
 
-It is not yet acceptable for a top quantitative-trading production-infrastructure portfolio claim because the two central claims—point-in-time correctness and production reliability—are not actually guaranteed by the implementation. Historical economic revisions are discarded, daily market bars have no defensible availability timestamp, provider rate limiting is only in process memory, migrations depend on current ORM metadata, backup is not recoverable by demonstrated procedure, and tests do not exercise PostgreSQL, migrations, the base lifecycle, or deployment behavior.
+It is not yet a production-quality quantitative-research data platform. Point-in-time availability semantics, economic-data vintages, durable provider-rate enforcement, Docker build-secret hygiene, and recovery/monitoring remain materially incomplete. Those gaps matter more than adding another feed or model.
 
-No P0 issue was found. P1 items below are substantial enough that a reviewer would expect them to be fixed before describing this as research-ready or production-ready.
+## Verified strengths
 
-## Scope and verified strengths
-
-- `.env` is ignored by Git; no tracked credential or private-key file was found.
-- Provider parsing is separated from normalized persistence: `WorldBankGdpIngestor`, `YahooFinanceMarketIngestor`, and `TravelMidwestCameraIngestor` extend `BaseIngestor`.
-- The schema has useful uniqueness constraints for economic observations, market prices, traffic cameras, and several transportation entities.
-- The production Compose file binds PostgreSQL only to `127.0.0.1` and supplies a database health check.
-- Ingestion runs are committed before network work, so a raised fetch error can be recorded as a failed run.
-- Camera parsing has fixture coverage for XML, CSV, the deprecated `ImgPath` behavior, and single-session duplicate handling. Market and GDP tests cover simple normalization and repeat-save behavior.
-- The server scripts provide a read-only health check and a PostgreSQL custom-format dump helper.
-
-These are good foundations. The findings below focus on what the implementation does **not** yet prove.
+- [`BaseIngestor`](../src/alt_data/ingestion/base.py) persists an ingestion run before network I/O and records success or failure.
+- [`docker-compose.server.yml`](../docker-compose.server.yml) binds PostgreSQL only to loopback and has a health check.
+- Market rows have a unique database key on `(source_id, symbol, observed_at)` in [`all_models.py`](../src/alt_data/models/all_models.py#L102) and migration `0004`.
+- Historical migrations [`0001`](../alembic/versions/0001_initial_schema.py) and [`0002`](../alembic/versions/0002_transportation_schema.py) now use explicit DDL, not current ORM metadata.
+- [`0005_market_price_not_null.py`](../alembic/versions/0005_market_price_not_null.py) checks incompatible NULL OHLCV data before changing constraints and does not recreate `market_prices`.
+- [`test_migrations_postgres.py`](../tests/test_migrations_postgres.py) contains PostgreSQL-specific coverage for zero-to-HEAD, 0004-to-0005 preservation, safe NULL failure, final constraints, uniqueness, and ORM-metadata isolation.
 
 ## Findings
 
-### P1 — Point-in-time availability is not modeled well enough to prevent market-data leakage
+### P1 — Daily market bars lack an availability timestamp, enabling look-ahead bias
 
-**Evidence**
+**Evidence:** [`yahoo_finance.py`](../src/alt_data/ingestion/market/yahoo_finance.py#L45) converts a daily-bar timestamp into `observed_at`; [`yahoo_finance.py`](../src/alt_data/ingestion/market/yahoo_finance.py#L130) always writes `published_at=None`; [`all_models.py`](../src/alt_data/models/all_models.py#L106) has no `available_at`; and no point-in-time query boundary exists. README says the fields support look-ahead controls ([`README.md`](../README.md#L13)), but code does not enforce this.
 
-- [src/alt_data/ingestion/market/yahoo_finance.py](../src/alt_data/ingestion/market/yahoo_finance.py#L45) turns a Yahoo daily-bar timestamp into `observed_at`.
-- [src/alt_data/ingestion/market/yahoo_finance.py](../src/alt_data/ingestion/market/yahoo_finance.py#L130) always writes `published_at=None`.
-- [src/alt_data/models/all_models.py](../src/alt_data/models/all_models.py) makes `observed_at`, `published_at`, and `retrieved_at` available in the model, but no availability rule, query helper, or view enforces their use.
-- [README.md](../README.md#L13) says the fields support look-ahead-bias controls, while [docs/PROJECT_NOTES.md](PROJECT_NOTES.md#L56) says future joins must use availability time. Neither is implemented.
+**Why it matters:** A daily high, low, close, and volume are only known after the session and source publication. A historical backfill makes old bars available later than their trading date. Joining on `observed_at` can give a model completed information before it existed.
 
-**Why it matters**
+**Smallest reasonable correction:** Define one daily-bar availability convention, persist an `available_at`/source-publication time separate from session date, and provide one tested query boundary requiring `available_at <= decision_time`. Test close, weekends, holidays, and historical backfills.
 
-A daily OHLCV bar is known only after a source publishes a completed session. A timestamp associated with the bar is not automatically its availability time. Backfilling the whole history today also gives every row a modern `retrieved_at`, which is correct provenance but cannot reconstruct what an earlier strategy could have known. A future date join can silently use a same-day close before it was available.
+### P1 — World Bank revisions are discarded permanently
 
-**Smallest reasonable correction**
+**Evidence:** [`world_bank.py`](../src/alt_data/ingestion/economic/world_bank.py#L46) skips an existing observation key; [`all_models.py`](../src/alt_data/models/all_models.py#L49) makes `(source, indicator, geography, observed_at)` unique; and [`world_bank.py`](../src/alt_data/ingestion/economic/world_bank.py#L56) writes `published_at=None`.
 
-Define and document one explicit daily-bar availability convention (for example, official exchange close plus a conservative source-publication delay). Store `source_published_at` or `available_at` separately from the session date and build one point-in-time query/view that filters `available_at <= decision_time`. Add leakage tests around market close, weekends, and historical backfills.
+**Why it matters:** Macro series are revised. The system stores neither what was first available at a decision time nor a later corrected vintage, preventing revision-aware research and correction.
 
-### P1 — Economic revisions are permanently discarded, so historical GDP is not point-in-time reproducible
+**Smallest reasonable correction:** Store observation period plus source publication/retrieval vintage separately. Preserve raw-payload provenance and select the latest vintage available at or before a requested decision time.
 
-**Evidence**
+### P1 — Travel Midwest rate limiting is process-local, not durable across jobs or reboot
 
-- [src/alt_data/ingestion/economic/world_bank.py](../src/alt_data/ingestion/economic/world_bank.py#L47) treats an existing `(source, indicator, geography, observed_at)` record as a duplicate and skips it.
-- [src/alt_data/models/all_models.py](../src/alt_data/models/all_models.py) defines `uq_economic_observation` on exactly those fields.
-- [src/alt_data/ingestion/economic/world_bank.py](../src/alt_data/ingestion/economic/world_bank.py#L56) sets `published_at=None`.
+**Evidence:** [`travel_midwest.py`](../src/alt_data/ingestion/traffic/travel_midwest.py#L25) stores last request time only in a class dictionary using `time.monotonic()`; each timer activation creates a short-lived container ([camera service](../deploy/systemd/alternative-data-camera.service#L8)); and the timer can run two minutes after boot ([camera timer](../deploy/systemd/alternative-data-camera.timer#L5)).
 
-**Why it matters**
+**Why it matters:** The in-memory guard disappears when the job/container ends or the host reboots. A manual run plus reboot, or concurrent activation, can violate the provider interval despite the normal hourly timer.
 
-Macro data is revised. The implementation retains only the first value fetched for a period, not the value released at a particular time and not the latest corrected value. That makes both revision-aware research and later data-quality correction impossible, despite the project goal of point-in-time research.
+**Smallest reasonable correction:** Persist last attempt per endpoint transactionally in PostgreSQL and acquire that gate before requests. Test independent process instances and a simulated reboot. Keep the hourly timer as normal cadence.
 
-**Smallest reasonable correction**
+### P1 — Docker builds could copy `.env` into the image **(implementation added; Docker-host verification pending)**
 
-Model observations as vintages: retain source publication/release time, value, and retrieval time, and make the idempotency key include an immutable source version or content hash. Provide a separate latest-vintage view instead of overwriting or skipping revisions.
+**Original evidence:** This checkout contains `.env` (not inspected); [`.gitignore`](../.gitignore) only governs Git; and [`Dockerfile`](../Dockerfile#L8) uses `COPY . ./`.
 
-### P1 — Alembic migrations are not immutable database definitions
+**Why it matters:** Docker does not honor `.gitignore`. Building from this directory can put credentials into the image filesystem/layers, where registry/image-export access can expose them.
 
-**Evidence**
+**Implemented correction:** [`.dockerignore`](../.dockerignore) now excludes `.env`/`.env.*`, VCS metadata, virtual environments, Python/test artifacts, local data/backup/work outputs, database dump patterns, and editor/OS artifacts. It deliberately retains application source, migrations, requirements, Compose files, tests, and documentation. Compose still supplies runtime configuration through `env_file: .env` in [`docker-compose.server.yml`](../docker-compose.server.yml).
 
-- [alembic/versions/0001_initial_schema.py](../alembic/versions/0001_initial_schema.py#L4) imports current `Base.metadata`, and [line 12](../alembic/versions/0001_initial_schema.py#L12) calls `create_all` using the current model definitions.
-- [alembic/versions/0002_transportation_schema.py](../alembic/versions/0002_transportation_schema.py#L4) does the same for Phase 2 tables.
-- [alembic/versions/0004_market_price_fields.py](../alembic/versions/0004_market_price_fields.py#L14) adds missing market columns as `nullable=True`, while the current ORM model declares the fields non-nullable.
+**Verification status:** The local audit workstation has no Docker CLI/daemon, so an image build and filesystem inspection could not be executed here. Before closing this finding, run the documented clean-image build and inspection on a Docker host; do not claim it verified until those checks pass.
 
-**Why it matters**
+### P1 — Backup handling is manual, local-only, and lacks restore proof
 
-Applying migration `0001` today does not necessarily create the same schema it created when first authored; it creates whichever current tables the ORM exposes. Two databases with different migration histories can therefore have different nullability and constraints while reporting the same Alembic revision. This breaks reproducible deployment and makes schema rollback/review unreliable.
+**Evidence:** [`backup-postgres.sh`](../deploy/backup-postgres.sh#L18) writes a local dump; [`deploy/README.md`](../deploy/README.md#L61) documents creation while leaving restore manual. There is no backup timer, retention, checksum, encryption, off-host copy, restore drill, RPO/RTO, or automated test.
 
-**Smallest reasonable correction**
+**Why it matters:** A same-host untested dump does not cover host loss, corruption, deletion, or an invalid backup. It is not evidence of recovery.
 
-Replace metadata-driven historical migrations with explicit Alembic DDL captured at the time of each change. Add a migration that backfills/validates existing market data and then enforces `NOT NULL` for required OHLCV fields. Test upgrade from an empty PostgreSQL database and from each supported prior revision.
+**Smallest reasonable correction:** Add a guarded restore runbook, scheduled retention, encrypted off-host copy, and recurring restoration into an isolated PostgreSQL instance. Record/alert on backup age and last restore verification.
 
-**Implementation evidence — 2026-09-19**
+### P2 — Idempotency is check-then-insert and races under concurrent jobs
 
-- `0001_initial_schema` and `0002_transportation_schema` now use explicit `op.create_table` / `op.drop_table` operations and no longer import `Base` or application model modules.
-- `0005_market_price_not_null` is a forward-only reconciliation migration. It verifies `market_prices` and all five required OHLCV columns exist, counts incompatible NULL rows before DDL, aborts on incompatibility, and otherwise changes only `open`, `high`, `low`, `adjusted_close`, and `volume` to `NOT NULL` in place.
-- `tests/test_migrations_postgres.py` adds disposable-PostgreSQL tests for zero-to-head migration, `0004`-to-`0005` data preservation, safe NULL-data failure, final nullability/unique constraint checks, a future-metadata probe, and static guards against ORM-metadata imports in historical migrations.
-- Local non-Docker validation completed with `11 passed, 4 skipped` because the Windows workspace has no Docker CLI/daemon. Full validation then ran on `aliensserver` in an isolated, ephemeral PostgreSQL 16 container with no host port, no persistent volume, and no production Compose database access: `tests/test_migrations_postgres.py` reported `6 passed in 5.14s`; the complete suite reported `15 passed in 5.60s` with no skips. Production migration remains intentionally unapplied.
+**Evidence:** Yahoo checks then adds in [`yahoo_finance.py`](../src/alt_data/ingestion/market/yahoo_finance.py#L124); World Bank does the same in [`world_bank.py`](../src/alt_data/ingestion/economic/world_bank.py#L46); camera metadata selects before insert in [`cameras.py`](../src/alt_data/ingestion/traffic/cameras.py#L76). Constraints exist, but there is no `ON CONFLICT` or integrity-error recovery.
 
-### P1 — Travel Midwest rate-limit compliance is not durable across processes or reboots
+**Why it matters:** Two jobs can both see no row; one unique violation then rolls back the whole ingestion run in [`base.py`](../src/alt_data/ingestion/base.py#L63).
 
-**Evidence**
+**Smallest reasonable correction:** Use PostgreSQL conflict-safe inserts/upserts and add a two-session PostgreSQL concurrency test.
 
-- [src/alt_data/ingestion/traffic/travel_midwest.py](../src/alt_data/ingestion/traffic/travel_midwest.py#L23) keeps the last request only in a class-level Python dictionary using `time.monotonic()`.
-- Every systemd service invocation starts a new Docker process: [deploy/systemd/alternative-data-camera.service](../deploy/systemd/alternative-data-camera.service#L8).
-- The timer triggers two minutes after every boot: [deploy/systemd/alternative-data-camera.timer](../deploy/systemd/alternative-data-camera.timer#L5).
-- The project documents a no-more-than-five-minute provider rule: [README.md](../README.md#L58).
+### P2 — Camera ingestion stores current metadata only, not historical snapshots or versions
 
-**Why it matters**
+**Evidence:** Existing `TrafficCamera` rows are overwritten in place ([`cameras.py`](../src/alt_data/ingestion/traffic/cameras.py#L76)). `CameraSnapshot` exists ([`all_models.py`](../src/alt_data/models/all_models.py#L153)) but no active code inserts into it. README says image bytes are intentionally deferred ([`README.md`](../README.md#L56)).
 
-The in-memory guard disappears at the end of each job, on container restart, and on server reboot. A manual run followed by reboot or another job can request the same feed within five minutes. The hourly schedule is normally conservative, but the code does not enforce the policy across the real deployment boundary.
+**Why it matters:** The system cannot reconstruct earlier metadata or pixels. It is a current camera directory, not a historical transportation/CV dataset.
 
-**Smallest reasonable correction**
+**Smallest reasonable correction:** Either clearly document current-metadata-only scope, or separately design an approved, rate-compliant snapshot/version pipeline with object storage, hashes, retention, and provider permission validation.
 
-Persist a per-provider/per-endpoint last-attempt timestamp transactionally in PostgreSQL and refuse a new request until the interval has elapsed. Make the timer consult that durable gate, including at boot. Add a test covering two separate process instances and a simulated reboot.
+### P2 — Failures are recorded but not operationally observable
 
-### P1 — Backup exists, but recovery has not been made operationally credible
+**Evidence:** [`base.py`](../src/alt_data/ingestion/base.py#L63) records failed runs and re-raises. Both systemd services are bare `Type=oneshot` units with no `User=`, timeout, resource hardening, failure hook, or alert ([`deploy/systemd`](../deploy/systemd)). [`check-server-health.sh`](../deploy/check-server-health.sh) is on-demand only.
 
-**Evidence**
+**Why it matters:** Failures can persist until a human reads a journal. There is no freshness/SLO signal; systemd does not retry the one-shot jobs; and default system service identity is normally root.
 
-- [deploy/backup-postgres.sh](../deploy/backup-postgres.sh#L11) writes a dump to a local `backups/` directory on the same server.
-- [deploy/README.md](../deploy/README.md) documents backup creation but deliberately provides no tested restore procedure.
-- There is no backup timer, retention policy, checksum verification, encryption, off-host copy, restore test, or test coverage for the script.
+**Smallest reasonable correction:** Use a dedicated least-privilege user with timeouts/hardening. Define freshness/failure SLOs, durable status/metrics, and alerts. Preserve the correct no-aggressive-retry policy for Travel Midwest.
 
-**Why it matters**
+### P2 — Tests are uneven; real PostgreSQL migration validation is not mandatory in the ordinary local run
 
-A local manual dump does not protect against host loss, disk corruption, operator deletion, or an untested restore. For production-engineering review, “a backup command exists” is weaker than “a restore has been exercised and recovery time is known.”
+**Evidence:** This audit's virtual-environment run produced **11 passed, 4 skipped**; the four skips were [`test_migrations_postgres.py`](../tests/test_migrations_postgres.py) because no Docker daemon was available. Other persistence tests use SQLite `Base.metadata.create_all()` (for example [`test_yahoo_finance.py`](../tests/test_yahoo_finance.py#L40)). No tracked CI workflow exists. There is no test of `BaseIngestor.run()` transaction paths, provider auth failure, Compose, systemd, backup, or restore.
 
-**Smallest reasonable correction**
+**Why it matters:** The migration suite is a strong improvement, but the application/deployment behavior most likely to differ on PostgreSQL is not continuously required.
 
-Document a guarded restore runbook, add an automated scheduled backup with bounded retention, copy encrypted backups to separate storage, and regularly restore a dump into an isolated database to verify it. Record the last successful backup and restore-test timestamps in monitoring.
+**Smallest reasonable correction:** Make the existing PostgreSQL suite required in CI, then add focused lifecycle/conflict tests, Compose smoke testing, and disposable backup/restore validation.
 
-### P1 — The test suite does not test the production database or the ingestion lifecycle
+### P2 — Development configuration has unsafe defaults and operational scripts assume fixed names
 
-**Evidence**
+**Evidence:** [`docker-compose.yml`](../docker-compose.yml#L8) publishes PostgreSQL on all interfaces by default; it has a fallback password ([line 6](../docker-compose.yml#L6)), as does [`settings.py`](../src/alt_data/config/settings.py#L10). [`check-server-health.sh`](../deploy/check-server-health.sh#L25) hardcodes the database/user instead of using configuration.
 
-- All persistence tests use SQLite in memory, for example [tests/test_yahoo_finance.py](../tests/test_yahoo_finance.py#L39).
-- Tests call `Base.metadata.create_all`, not Alembic migrations, for example [tests/test_yahoo_finance.py](../tests/test_yahoo_finance.py#L40).
-- There is no test for `BaseIngestor.run()` success/failure paths, raw-payload persistence, failed-run commit, concurrent writes, PostgreSQL constraint behavior, Docker Compose, systemd, backup creation, or restore.
+**Why it matters:** The production Compose file is private, but a developer can accidentally expose a predictable-password development database. Health checks can fail or misreport after a legitimate configuration change.
 
-**Why it matters**
+**Smallest reasonable correction:** Require a password, bind development PostgreSQL to loopback by default, and read configured database names safely without printing secrets.
 
-SQLite differs materially from PostgreSQL in types, constraints, transaction behavior, and DDL. The current nine tests prove small parser and single-session save examples, not that the deployed schema or failure behavior works. The passing suite creates a false sense of operational coverage.
+### P2 — Documentation conflicts with implemented state
 
-**Smallest reasonable correction**
+**Evidence:** README calls Phases 1 and 2 complete ([`README.md`](../README.md#L78)) and describes timestamp fields as distinguishing availability ([line 13](../README.md#L13)). [`PROJECT_NOTES.md`](PROJECT_NOTES.md#L18) still calls scheduling the next gate and leaves timer/reboot validation unchecked at lines 128–130. Active market and World Bank ingestors write `published_at=None`.
 
-Run integration tests against disposable PostgreSQL in CI, execute `alembic upgrade head`, and test successful/failed `BaseIngestor.run()` transactions. Add fixture-driven provider-client tests, concurrency/idempotency tests, Compose smoke tests, and a backup/restore integration test.
+**Why it matters:** Portfolio reviewers penalize claims stronger than code. Conflicting documents obscure what was demonstrated versus planned.
 
-### P2 — Idempotency uses check-then-insert and is not safe for concurrent jobs
+**Smallest reasonable correction:** Maintain one concise status table separating implemented, validated, deployed, and planned. Explicitly state that vintages, point-in-time joins, snapshots, recovery testing, and monitoring are incomplete.
 
-**Evidence**
+### P3 — Dependency and build reproducibility are weak
 
-- Market persistence does a `SELECT` followed by `add`: [src/alt_data/ingestion/market/yahoo_finance.py](../src/alt_data/ingestion/market/yahoo_finance.py#L121).
-- GDP does the same: [src/alt_data/ingestion/economic/world_bank.py](../src/alt_data/ingestion/economic/world_bank.py#L47).
-- Camera persistence does the same: [src/alt_data/ingestion/traffic/cameras.py](../src/alt_data/ingestion/traffic/cameras.py) in `save`.
-- The database has unique constraints, but the code does not use PostgreSQL `ON CONFLICT` or recover an `IntegrityError` for an expected concurrent duplicate.
+**Evidence:** [`requirements.txt`](../requirements.txt) uses broad ranges without a lock file/hashes. [`Dockerfile`](../Dockerfile) uses a floating `python:3.12-slim` tag and unrestricted package resolution. No CI/build verification is tracked.
 
-**Why it matters**
+**Why it matters:** Future rebuilds can select different dependencies or base images from the same commit.
 
-Two overlapping jobs can both see no existing row. One commit then causes the other whole transaction to fail. This is also an N+1-query pattern that becomes slow as history or camera counts grow.
+**Smallest reasonable correction:** Add a locked dependency artifact with hashes, a maintained base-image pin/digest policy, and CI build/test verification.
 
-**Smallest reasonable correction**
+### P3 — The schema lacks some operational indexes and validity constraints
 
-Use PostgreSQL bulk inserts with `ON CONFLICT DO NOTHING` or carefully scoped upserts, and derive inserted/skipped counts from their results. Add a concurrent-run integration test and an index/plan check for expected query volume.
+**Evidence:** [`all_models.py`](../src/alt_data/models/all_models.py) has unique constraints but no explicit indexes for common foreign keys such as `ingestion_runs.source_id` and `raw_payloads.ingestion_run_id`. `IngestionRun.status` is unconstrained ([line 27](../src/alt_data/models/all_models.py#L27)) and counters have no non-negative checks.
 
-### P2 — Successful camera jobs overwrite mutable metadata without preserving its history
+**Why it matters:** Run/payload queries will slow as collection grows and invalid lifecycle values are representable.
 
-**Evidence**
+**Smallest reasonable correction:** Add only query-driven indexes and lightweight status/counter constraints, with migration tests.
 
-- Existing rows update `last_seen_at`, URLs, age flags, and active status in [src/alt_data/ingestion/traffic/cameras.py](../src/alt_data/ingestion/traffic/cameras.py) `save`.
-- There is no insert into `camera_snapshots` or an observation/version table during camera metadata ingestion.
-- When the CSV lacks an ID, identity is derived from location, coordinates, and direction in [src/alt_data/ingestion/traffic/travel_midwest.py](../src/alt_data/ingestion/traffic/travel_midwest.py#L109).
+## Remediated migration finding
 
-**Why it matters**
-
-The table becomes a latest-state catalog, not a time series. A changed URL/location/direction can overwrite prior state; a changed identity component can create a new synthetic camera. This is insufficient to support later historical transportation analysis or to demonstrate stable entity resolution.
-
-**Smallest reasonable correction**
-
-Treat `traffic_cameras` as an entity table and create a versioned metadata-observation table keyed by camera and retrieval time. Define and document a stable identity strategy for the provider’s ID-less CSV, with tests for field changes and collisions.
-
-### P2 — Provider provenance is incomplete and Yahoo raw payload metadata is synthetic
-
-**Evidence**
-
-- Yahoo fetches `query1.finance.yahoo.com/v8/finance/chart/...` at [src/alt_data/ingestion/market/yahoo_finance.py](../src/alt_data/ingestion/market/yahoo_finance.py#L22).
-- It then stores a transformed JSON list and constructs a different `finance.yahoo.com/quote/.../history` URL at [lines 96-98](../src/alt_data/ingestion/market/yahoo_finance.py#L96).
-- `BaseIngestor` only creates `RawPayload` after `fetch()` succeeds at [src/alt_data/ingestion/base.py](../src/alt_data/ingestion/base.py#L50); failed HTTP response metadata/body is not retained.
-
-**Why it matters**
-
-The audit table cannot reproduce the source response or prove which endpoint/parameters produced a row. For data debugging and a research trail, transformed payloads labeled as raw are misleading and failures lose useful provider evidence.
-
-**Smallest reasonable correction**
-
-Have provider clients return the actual canonical request URL, selected headers/status, and raw response bytes; store a content hash and bounded raw body. Record response metadata for non-success HTTP responses while redacting credentials and sensitive headers.
-
-### P2 — Scheduled jobs have weak failure isolation, alerting, and ownership controls
-
-**Evidence**
-
-- One symbol exception stops the remaining market universe: [scripts/ingest_yahoo_finance.py](../scripts/ingest_yahoo_finance.py#L12).
-- The systemd services have no explicit `User=`, `Group=`, resource limits, timeout, retry policy, failure hook, or alert target: [deploy/systemd/alternative-data-market.service](../deploy/systemd/alternative-data-market.service) and [deploy/systemd/alternative-data-camera.service](../deploy/systemd/alternative-data-camera.service).
-- Observability is a manual health script and journal inspection: [deploy/check-server-health.sh](../deploy/check-server-health.sh).
-
-**Why it matters**
-
-One bad ticker can hide updates for all later tickers. A systemd unit without an explicit non-root service identity runs as root by default. Failures are visible only when somebody manually checks, and there is no SLO, metric, alert, or retry/backoff policy tailored per provider.
-
-**Smallest reasonable correction**
-
-Make each symbol independently reported while preserving a non-zero aggregate failure status. Run units under a dedicated least-privilege user with a controlled Docker access strategy, explicit timeouts and hardening directives. Export run freshness/failure metrics and send a failure notification; use provider-specific retry/backoff only where policy permits.
-
-### P2 — Security differs sharply between development and production Compose files
-
-**Evidence**
-
-- Development Compose publishes PostgreSQL on all interfaces and has a fallback password: [docker-compose.yml](../docker-compose.yml#L7) and [docker-compose.yml](../docker-compose.yml#L10).
-- `Settings` also defaults to `postgres_password = "change_me"`: [src/alt_data/config/settings.py](../src/alt_data/config/settings.py#L9).
-- Production Compose correctly requires a password and binds to loopback: [docker-compose.server.yml](../docker-compose.server.yml#L8) and [line 13](../docker-compose.server.yml#L13).
-
-**Why it matters**
-
-Running the development command on a laptop attached to an untrusted network can expose a database guarded by a known fallback password. The safer production configuration does not eliminate this local foot-gun.
-
-**Smallest reasonable correction**
-
-Require `POSTGRES_PASSWORD` in every Compose profile, bind local development PostgreSQL to `127.0.0.1` by default, and make an intentionally public bind an explicit opt-in. Fail settings validation for the known placeholder password outside an explicitly marked test environment.
-
-### P2 — Documentation overstates completion and operational proof
-
-**Evidence**
-
-- [README.md](../README.md#L80) calls Phases 1 and 2 complete and presents point-in-time work as the next milestone.
-- [docs/PROJECT_NOTES.md](PROJECT_NOTES.md#L13) labels ingestion, economic, transportation, and market work complete.
-- The same notes still list camera timer observation, market timer observation, and reboot recovery as unchecked at [lines 128-130](PROJECT_NOTES.md#L128).
-- The repository contains no committed evidence of a successful scheduled market execution, restore test, or point-in-time join test.
-
-**Why it matters**
-
-Portfolio reviewers discount claims that are stronger than the committed proof. “Complete” should mean a precise acceptance criterion passed, not that a component once ran manually.
-
-**Smallest reasonable correction**
-
-Replace broad completion labels with evidence-based states such as “implemented,” “manually validated,” and “operational acceptance pending.” Add a concise acceptance checklist that links to reproducible commands, test output, and run artifacts without committing private production logs.
-
-### P3 — Schema and audit tables lack several useful constraints and indexes
-
-**Evidence**
-
-- `IngestionRun.status` is an unconstrained string in [src/alt_data/models/all_models.py](../src/alt_data/models/all_models.py).
-- Foreign keys such as `raw_payloads.ingestion_run_id` and `ingestion_runs.source_id` have no explicit indexes in the model.
-- `RawPayload.payload` is truncated at [src/alt_data/ingestion/base.py](../src/alt_data/ingestion/base.py#L55), but no `truncated` flag or content hash is stored.
-
-**Why it matters**
-
-Bad status values can enter the audit trail, operational queries will slow as run history grows, and a reviewer cannot distinguish a complete raw body from an intentionally truncated one without comparing lengths manually. These are not immediate correctness failures but reduce durability and operability.
-
-**Smallest reasonable correction**
-
-Use a check constraint or enum for run status, add indexes for operational query paths, and store payload hash plus a boolean truncation indicator. Add retention rules for raw data.
-
-### P3 — Dependency, build, and CI reproducibility are minimal
-
-**Evidence**
-
-- [requirements.txt](../requirements.txt) uses broad compatible version ranges without a lock file or hashes.
-- [Dockerfile](../Dockerfile) installs those live ranges at image build time.
-- No CI workflow is present in the repository, and no test/lint/type-check command is enforced before merge.
-
-**Why it matters**
-
-The same commit can build against different transitive dependencies over time. A portfolio project for production infrastructure should demonstrate that verification is repeatable and automatically enforced.
-
-**Smallest reasonable correction**
-
-Adopt a locked dependency workflow, pin the base image to a supported digest or clearly managed version, and add CI that runs formatting/linting, type checking, unit tests, PostgreSQL migration tests, and a Compose smoke test.
+The previous migration-reproducibility P1 is **verified remediated in this checkout**. `0001` and `0002` contain immutable explicit DDL; `0005` safely reconciles nullable OHLCV fields; and the Postgres-only test suite guards historical migration isolation and upgrade behavior. The local audit environment could not execute Docker-dependent tests, so their source was inspected and execution remains required in Docker/CI. This is no longer an open migration-design finding.
 
 ## Engineering review
 
-### Data integrity and transactions
+### Data integrity and timestamp semantics
 
-The base lifecycle correctly commits the initial run before the network request and marks failures after rollback. That is a worthwhile pattern. However, the final save transaction combines raw payload, transformation, many row inserts, and success status without bulk conflict handling. It is correct for one tiny serial job but has race conditions, N+1 existence checks, and no PostgreSQL integration coverage.
-
-The greatest integrity concern is semantic, not SQL syntax: revision-sensitive economic data is skipped and daily market availability is not represented. A quantitative reviewer will view those as more serious than simple duplicate bugs.
+The schema has the right vocabulary—`observed_at`, `published_at`, and `retrieved_at`—and UTC-aware columns. The active sources do not define/enforce a source-specific availability invariant. `retrieved_at` is evidence of local receipt, not publication time, and cannot make a historical backfill point-in-time correct. Constraints help, but check-then-insert forfeits concurrency safety.
 
 ### Provider isolation and failure handling
 
-The adapters are a good direction: callers do not persist provider-specific JSON objects. The boundary needs to preserve real request/response provenance, parse provider error bodies safely, and handle each market symbol independently. Travel Midwest failure handling appropriately avoids an immediate retry, but the five-minute guard is not durable across service invocations.
+The Yahoo adapter keeps provider JSON outside the data model, a sound prototype boundary. HTTP timeouts and status checks exist. Yahoo/World Bank have no retry/backoff policy or health telemetry; one failing Yahoo symbol ends the sequential loop. Travel Midwest correctly avoids immediate retry, but its rate gate is not durable.
 
-### Timestamps and look-ahead risk
+### Docker, systemd, security, and recovery
 
-UTC-aware timestamps are consistently attempted, which is good. The project has `observed_at`, `published_at`, and `retrieved_at` fields but not a documented invariant for each source or a query layer that makes leakage hard. At present, the fields are recording aids, not a point-in-time system.
+Loopback PostgreSQL, health checks, named volume, systemd scheduling, and Tailscale-oriented access are real strengths. The absent `.dockerignore` is a material secret risk. Systemd is minimally configured. The backup helper is safe in the narrow sense that it does not overwrite data, but is not a recovery program.
 
-### Deployment, operations, and security
+### Performance and complexity
 
-The production Compose file’s loopback binding, health check, persistent volume, systemd scheduling, and Tailscale-based access are real operational positives. Weaknesses are no declared service user, no alerts, no resource limits, manual/no-off-host backups, no restore test, and different security defaults in development Compose. The server is a useful homelab deployment, not a demonstrated production deployment yet.
-
-### Testing quality
-
-Nine fast unit tests are better than no tests, but they are all narrow. They do not test actual migrations, PostgreSQL behavior, scheduling, actual provider HTTP handling, error persistence, or restore. The suite should be described as parser/save unit coverage, not production verification.
+The design is compact and understandable. Primary scale risks are per-row existence reads for historical load and missing measured indexes. Fix data correctness and operability before adding queues, Kubernetes, or a data lake.
 
 ## Scorecard
 
-| Dimension | Score | Reviewer rationale |
+| Area | Score | Assessment |
 | --- | ---: | --- |
-| Architecture and separation of concerns | 6.5 | Clear `BaseIngestor` and provider adapters, but duplicated source registries and mixed current/latest-state semantics. |
-| Data integrity and idempotency | 4.5 | Useful unique keys, but revision loss, race-prone check-then-insert, and migration drift are material. |
-| Point-in-time research correctness | 3.0 | Fields exist, but availability/vintage semantics and leakage controls do not. |
-| Reliability and failure handling | 5.0 | Failure runs are recorded and camera avoids immediate retry; no durable rate gate, per-symbol isolation, alerts, or tested recovery. |
-| Security | 5.5 | Production DB is private and secrets are ignored; development defaults and root-run jobs are weak. |
-| Observability and operations | 5.0 | Logs, run table, health script, and backup helper exist; no metrics/alerts/restore test. |
-| Testing and CI | 3.5 | 9 passing narrow SQLite unit tests; no Postgres/migration/CI/deployment coverage. |
-| Deployment reproducibility | 5.5 | Docker/systemd documentation is useful, but metadata-driven migrations, floating dependencies, and no CI reduce confidence. |
-| Documentation and portfolio communication | 6.0 | Honest learning journal and useful commands, but completion claims exceed repository proof. |
-| **Overall** | **5.6** | Strong learning prototype; not yet a production-grade quantitative data platform. |
+| Data correctness / point-in-time safety | 3.0 | Timestamp fields exist; availability and vintages do not. |
+| Database design and migrations | 7.5 | Good foundation; migration reproducibility has strong PostgreSQL-specific coverage. |
+| Ingestion architecture | 6.5 | Reusable lifecycle/adapters; concurrency and resilience incomplete. |
+| Testing and verification | 6.0 | Offline unit tests and migration suite; no CI/lifecycle/deployment/restore coverage. |
+| Security and deployment | 5.0 | Private production port is good; build-secret exposure/hardening remain serious. |
+| Observability and recovery | 4.5 | Logs, runs, health script, dump helper; no metrics, alerts, or verified restore. |
+| Documentation / portfolio communication | 5.0 | Helpful narrative but readiness claims exceed implementation. |
 
 ## Recruiter reaction
 
-“This candidate has actually deployed a data collector, used PostgreSQL, thought about provider limits, and can talk through Docker/systemd/Tailscale. That is stronger than a notebook-only project. I would be interested in a screen for an early-career infrastructure role. However, the README’s production/research-ready implications are ahead of the implementation. I would probe data-vintage correctness, migrations, backup recovery, and monitoring before treating this as evidence of production ownership.”
+“This candidate has deployed a real collector, used PostgreSQL, Docker, systemd, and provider constraints, and can explain a safe schema-migration remediation. That is stronger than a notebook-only project. I would consider an early-career screen, but not accept ‘production-ready’ or ‘point-in-time research-ready’ claims until availability/vintage correctness, recovery, and monitoring are demonstrated.”
 
 ## Red flags
 
-1. Claiming point-in-time correctness before availability-time and vintage data are implemented.
-2. Claiming robust idempotency while relying on serial check-then-insert behavior.
-3. Claiming provider-rate enforcement while the limiter resets with every container process or reboot.
-4. Calling manual local dumps a backup strategy without a tested restore or off-host copy.
-5. Calling tests comprehensive when they do not run migrations or PostgreSQL.
-6. Calling milestones complete without committed operational acceptance evidence.
+1. Claiming daily OHLCV is point-in-time usable without an availability convention.
+2. Discarding macro revisions while claiming reproducible historical information sets.
+3. Provider-rate enforcement that resets with each container or reboot.
+4. A Dockerfile that can bake `.env` into image layers.
+5. Calling manual local dumps a recovery strategy without a restore drill.
+6. Conflicting documentation about operational completion.
 
 ## Interview attack: 10 difficult questions
 
-1. A GDP value for 2021 is revised in 2024. Which value is eligible for a strategy decision made in 2022, and where is that proven in your schema?
-2. Why is a Yahoo daily bar’s `observed_at` not necessarily the time at which a trading system could use its close?
-3. Show how two concurrently running market jobs avoid a duplicate-insert race without relying on application-level `SELECT` checks.
-4. Why are your Alembic migrations importing current ORM metadata, and how can you prove a fresh database and an upgraded old database have identical schemas?
-5. What prevents a server reboot two minutes after a camera request from violating the provider’s five-minute request rule?
-6. Restore last night’s database backup into an isolated database. What are your RPO, RTO, and evidence that the dump is valid?
-7. What happens when ticker 4 of 21 fails at the provider? Which tickers update, which fail, and how are you alerted?
-8. Why are production job containers effectively root, and what least-privilege model would you use instead?
-9. Your raw payload points to a Yahoo history page, not the chart endpoint actually called. How would an investigator replay the source request exactly?
-10. Which tests would fail if PostgreSQL rejects a constraint that SQLite accepts differently, or if an Alembic migration does not match the ORM model?
+1. At what timestamp may a strategy use a Yahoo daily close, and how is that enforced?
+2. How would you reconstruct GDP as it was known before a later revision?
+3. What prevents two systemd runs inserting a duplicate price simultaneously?
+4. Why does `.gitignore` not protect `.env` in a Docker build, and how prove the fix?
+5. How does a reboot two minutes after a camera request avoid violating provider policy?
+6. Restore last night's backup into isolation: what are measured RPO, RTO, and validation checks?
+7. Which parts of `BaseIngestor.run()` commit if parsing fails, and why?
+8. Why are these migration tests PostgreSQL-specific rather than SQLite?
+9. How would you monitor stale data and repeated provider failures without logging secrets?
+10. Why is a historical Yahoo backfill riskier than live collection for a quant model?
 
 ## Path to 8.0
 
-1. Make migrations explicit and immutable; test all upgrades on disposable PostgreSQL.
-2. Implement source-specific availability/vintage semantics and a single tested point-in-time query boundary.
-3. Use PostgreSQL conflict-safe bulk writes and test concurrent ingestion.
-4. Persist provider request timing so rate limits survive containers and reboot.
-5. Add CI with PostgreSQL integration tests, migration tests, and Compose smoke tests.
-6. Add per-provider/job metrics and failure notification.
-7. Implement scheduled, off-host, encrypted backups and one tested restore procedure.
-8. Correct documentation to distinguish implemented, manually validated, and operationally accepted work.
+1. Fix Docker build-context secret handling and prove it.
+2. Implement explicit availability/vintage semantics plus one tested point-in-time query boundary.
+3. Make provider timing durable and conflict-safe across processes/reboots.
+4. Use PostgreSQL conflict-safe writes and test concurrency.
+5. Run unit tests and PostgreSQL migrations in CI.
+6. Add scheduled encrypted off-host backups and demonstrate isolated restore.
+7. Add freshness/failure monitoring and a clear operational runbook.
 
 ## Path to 9.0
 
-1. Add a tested research data contract: release calendar/source availability, revision vintages, and no-leakage feature generation.
-2. Add durable orchestration/queueing or a carefully engineered scheduler with job locks, backpressure, per-source policies, and replay support.
-3. Add immutable raw-response object storage with hashes, retention, versioned schemas, and lineage from raw response to normalized row.
-4. Instrument latency, freshness, success rate, duplicate rate, provider error rate, database health, backup age, and restore success; alert on defined SLOs.
-5. Harden runtime identity, image/dependency supply chain, secrets delivery, database role separation, and infrastructure-as-code.
-6. Demonstrate load tests, failure injection, disaster recovery, and a complete reproducible server bootstrap.
+1. Add revision-aware economic/market provenance with source hashes and deterministic replay.
+2. Add a tested weather source and point-in-time joins.
+3. Harden deployment with least privilege, timeouts, limits, and pinned supply chain.
+4. Define SLOs for ingestion, freshness, DB health, backups, and recovery; exercise alerts.
+5. Run load/concurrency tests and tune indexes from query plans.
+6. Design camera snapshot storage only after permission, lifecycle, cost, and recovery requirements are explicit.
 
 ## Resume test
 
-**Do not yet say:** “Built a production-ready point-in-time alternative-data platform for quantitative research.”
+**Accurate now:** “Built and deployed a PostgreSQL-based market and transportation ingestion prototype using Docker, systemd, SQLAlchemy/Alembic, provider adapters, and tested PostgreSQL schema migrations.”
 
-**Accurate today:** “Built and deployed a Dockerized PostgreSQL ingestion prototype that collects provider-isolated market and Chicago traffic-camera metadata, records ingestion runs and bounded payloads, and schedules jobs with systemd on Ubuntu.”
+**Do not claim yet:** “Built a production-ready point-in-time alternative-data platform,” “eliminated look-ahead bias,” or “implemented disaster recovery.”
 
-**After the 8.0 path:** “Built a point-in-time-aware market and transportation data platform with revision-aware provenance, PostgreSQL conflict-safe ingestion, tested migrations, monitoring, and verified backup recovery.”
+**After the 8.0 path:** “Built a point-in-time-aware data platform with revision-aware provenance, conflict-safe PostgreSQL ingestion, verified migrations, monitoring, and tested backup recovery.”
 
 ## Interview value
 
-This project is worth discussing now because it gives concrete stories about provider access, a real upstream HTTP 500, rate-limit policy, schema migration tradeoffs, Docker installation, SSH/Tailscale access, systemd timers, database persistence, and debugging scheduler failures. Its best value is showing learning velocity and operational curiosity. Its weak value is any claim that the current system has solved quantitative data correctness or production reliability. Be candid about the gaps and describe the ordered remediation plan above.
+The project already supports good stories about provider integration, upstream failures, Docker deployment, SSH/Tailscale access, scheduler behavior, and safe migration repair. Its value increases if you lead with what is implemented, state the gaps candidly, and explain the remediation order. The next most valuable work is correctness and operability—not another data source, YOLO, or model.
 
-## Audit stop point
+## Test record for this audit
 
-This audit intentionally makes no implementation changes. The next work should be selected from the P1 remediation path, starting with migration reproducibility and point-in-time/vintage semantics before adding more sources or modeling.
+Executed locally with the repository virtual environment:
+
+```text
+11 passed, 4 skipped in 1.26s
+```
+
+All four skips were intentionally PostgreSQL-only migration tests, skipped because this audit workstation had no Docker daemon. No production database, server, external provider, `.env`, credentials, or private key was accessed.

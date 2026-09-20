@@ -1,0 +1,36 @@
+# Runtime configuration and source-control metadata never belong in an image.
+.env
+.env.*
+.git
+.gitignore
+
+# Local Python environments and generated Python/test artifacts.
+.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local data, backups, and generated work products.
+data/
+backups/
+work/
+outputs/
+*.dump
+*.dump.*
+*.sql.gz
+*.bak
+
+# Editor and operating-system artifacts.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
