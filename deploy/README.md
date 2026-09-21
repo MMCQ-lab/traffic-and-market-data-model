@@ -41,7 +41,7 @@ sudo systemctl enable --now alternative-data-camera.timer alternative-data-marke
 systemctl list-timers 'alternative-data-*'
 ```
 
-The camera-metadata job runs hourly. The market job runs at 7:15 PM America/Chicago each weekday. The Travel Midwest five-minute rule remains the maximum permitted request frequency, not a requirement to poll that often.
+The camera-metadata job runs at 3:00 AM America/Chicago on the first day of each month. The market job runs at 7:15 PM America/Chicago each weekday. The Travel Midwest five-minute rule remains the maximum permitted request frequency, not a requirement to poll that often.
 
 ## Operations
 

@@ -1,9 +1,10 @@
 [Unit]
-Description=Run Travel Midwest camera metadata ingestion hourly
+Description=Run Travel Midwest camera metadata ingestion monthly
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=1h
+# The provider says this directory changes infrequently. Refresh it on the
+# first day of each month, using an explicit timezone for predictable ops.
+OnCalendar=*-*-01 03:00:00 America/Chicago
 Persistent=true
 Unit=alternative-data-camera.service
 

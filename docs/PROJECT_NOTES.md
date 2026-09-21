@@ -22,7 +22,7 @@ production health.
 | Chicago transportation | Complete | Authenticated Travel Midwest camera metadata ingestion; live feed persisted in PostgreSQL |
 | Market data | Complete | 21-symbol daily OHLCV universe stored on the Ubuntu server |
 | Ubuntu hosting | Operational baseline | Docker PostgreSQL and ingestion container deployed; access is available over Tailscale/SSH |
-| Automatic schedules | Next operational gate | Camera metadata hourly; weekday market timer after market close; verify recovery after reboot |
+| Automatic schedules | Operational | Camera metadata monthly; weekday market timer after market close |
 | Weather and temporal joins | Not started | Phase 4 |
 | Camera image collection / YOLO | Not started | Deferred intentionally |
 
@@ -42,7 +42,7 @@ production health.
 - Preserved location, direction, latitude, longitude, snapshot URL, age flags, optional video URL, and retrieval time.
 - Ignored the deprecated `ImgPath` column; the supported `SnapShot` URL is used instead.
 - Added duplicate handling for repeated rows in one feed and across later runs.
-- Enforced the provider rule that camera metadata should be fetched no more than once every five minutes. The current metadata schedule is hourly; a timeout is recorded for the next scheduled attempt rather than retried immediately.
+- Enforced the provider rule that camera metadata should be fetched no more than once every five minutes. After the provider confirmed that the camera directory changes infrequently, its schedule was reduced to 3:00 AM America/Chicago on the first day of each month. A timeout is recorded for the next scheduled attempt rather than retried immediately.
 - First Ubuntu server run persisted 4,568 camera records, with 119 duplicate feed rows skipped.
 
 ### Phase 3A — market data
