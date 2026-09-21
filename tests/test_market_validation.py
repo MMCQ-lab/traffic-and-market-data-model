@@ -24,6 +24,41 @@ def test_offset_is_converted_not_relabelled():
     assert _as_observed_at("2025-01-02T08:30:00-06:00") == datetime(2025, 1, 2, 14, 30, tzinfo=timezone.utc)
 
 
+def test_inconsistent_iyt_bar_is_quarantined_without_losing_valid_history(caplog):
+    valid = {**PAYLOAD[0], "observed_at": "2026-09-18T13:30:00+00:00"}
+    provider_anomaly = {
+        **PAYLOAD[0],
+        "observed_at": "2026-09-21T13:30:00+00:00",
+        "open": 80.44000244140625,
+        "high": 80.31999969482422,
+        "low": 79.29000091552734,
+        "close": 79.86000061035156,
+    }
+
+    with caplog.at_level("WARNING"):
+        rows = YahooFinanceMarketIngestor(None, "IYT", "2010-01-01").validate(
+            [valid, provider_anomaly]
+        )
+
+    assert len(rows) == 1
+    assert rows[0]["observed_at"] == datetime(2026, 9, 18, 13, 30, tzinfo=timezone.utc)
+    assert "symbol=IYT observed_at=2026-09-21T13:30:00+00:00" in caplog.text
+    assert "rejected=1" in caplog.text
+
+
+def test_only_inconsistent_bars_still_fail_the_symbol():
+    provider_anomaly = {
+        **PAYLOAD[0],
+        "open": 80.44,
+        "high": 80.32,
+        "low": 79.29,
+        "close": 79.86,
+    }
+
+    with pytest.raises(ValueError, match="no complete daily OHLCV"):
+        YahooFinanceMarketIngestor(None, "IYT", "2010-01-01").validate([provider_anomaly])
+
+
 def test_missing_adjusted_history_does_not_become_raw_close(monkeypatch):
     response = httpx.Response(200, request=httpx.Request("GET", "https://example.test"), json={
         "chart": {"result": [{"timestamp": [1], "indicators": {"quote": [{

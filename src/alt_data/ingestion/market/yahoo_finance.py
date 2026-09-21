@@ -106,6 +106,7 @@ class YahooFinanceMarketIngestor(BaseIngestor):
             raise ValueError("Unexpected Yahoo Finance response shape")
         rows = []
         incomplete = 0
+        inconsistent = 0
         for item in payload:
             if not isinstance(item, dict):
                 raise ValueError("Market observation must be an object")
@@ -124,10 +125,22 @@ class YahooFinanceMarketIngestor(BaseIngestor):
                 "adjusted_close": _as_decimal(item["adjusted_close"]), "volume": int(volume),
             }
             if not row["low"] <= min(row["open"], row["close"]) <= max(row["open"], row["close"]) <= row["high"]:
-                raise ValueError("Market OHLC values are inconsistent")
+                inconsistent += 1
+                # Preserve the provider response in raw_payloads, reject only
+                # this observation, and let a later full-history run accept a
+                # corrected value for the same timestamp.
+                logger.warning(
+                    "Inconsistent market bar rejected: symbol=%s observed_at=%s "
+                    "open=%s high=%s low=%s close=%s",
+                    self.symbol, row["observed_at"].isoformat(), row["open"],
+                    row["high"], row["low"], row["close"],
+                )
+                continue
             rows.append(row)
         if incomplete:
             logger.warning("Incomplete market bars: symbol=%s rejected=%s", self.symbol, incomplete)
+        if inconsistent:
+            logger.warning("Inconsistent market bars: symbol=%s rejected=%s", self.symbol, inconsistent)
         if not rows:
             raise ValueError("Yahoo Finance returned no complete daily OHLCV observations")
         return rows
