@@ -5,6 +5,13 @@
 
 ## Verdict
 
+**Implementation update — 2026-09-21:** See [hardening notes](HARDENING.md) for
+the prepared database request gate, transaction evidence retention, market
+validation/batch isolation, safer test databases, required PostgreSQL CI, and
+image checks. Local result: 35 passed, 16 PostgreSQL tests skipped (no local
+Docker/PostgreSQL). Production and rebuilt-image validation remain pending.
+The score below is the historical review score; it has not been reassessed.
+
 **OVERALL SCORE: 6.1 / 10**
 **STATUS: NOT ACCEPTABLE**
 
@@ -41,13 +48,19 @@ It is not yet a production-quality quantitative-research data platform. Point-in
 
 ### P1 — Travel Midwest rate limiting is process-local, not durable across jobs or reboot
 
+**Update:** Replaced locally by `PostgresRequestGate` plus migration `0006`,
+with a committed claim and an advisory lock held during the request. Tests cover
+process death, overlap, cooldown retention, and failure with missing schema.
+Real PostgreSQL execution and production deployment are still pending; this
+finding is implemented but not yet operationally closed.
+
 **Evidence:** [`travel_midwest.py`](../src/alt_data/ingestion/traffic/travel_midwest.py#L25) stores last request time only in a class dictionary using `time.monotonic()`; each timer activation creates a short-lived container ([camera service](../deploy/systemd/alternative-data-camera.service#L8)); and the timer can run two minutes after boot ([camera timer](../deploy/systemd/alternative-data-camera.timer#L5)).
 
 **Why it matters:** The in-memory guard disappears when the job/container ends or the host reboots. A manual run plus reboot, or concurrent activation, can violate the provider interval despite the normal hourly timer.
 
 **Smallest reasonable correction:** Persist last attempt per endpoint transactionally in PostgreSQL and acquire that gate before requests. Test independent process instances and a simulated reboot. Keep the hourly timer as normal cadence.
 
-### P1 — Docker builds could copy `.env` into the image **(implementation added; Docker-host verification pending)**
+### P1 — Docker builds could copy `.env` into the image **(remediated for new builds; pre-fix image must be retired)**
 
 **Original evidence:** This checkout contains `.env` (not inspected); [`.gitignore`](../.gitignore) only governs Git; and [`Dockerfile`](../Dockerfile#L8) uses `COPY . ./`.
 
@@ -55,7 +68,9 @@ It is not yet a production-quality quantitative-research data platform. Point-in
 
 **Implemented correction:** [`.dockerignore`](../.dockerignore) now excludes `.env`/`.env.*`, VCS metadata, virtual environments, Python/test artifacts, local data/backup/work outputs, database dump patterns, and editor/OS artifacts. It deliberately retains application source, migrations, requirements, Compose files, tests, and documentation. Compose still supplies runtime configuration through `env_file: .env` in [`docker-compose.server.yml`](../docker-compose.server.yml).
 
-**Verification status:** The local audit workstation has no Docker CLI/daemon, so an image build and filesystem inspection could not be executed here. Before closing this finding, run the documented clean-image build and inspection on a Docker host; do not claim it verified until those checks pass.
+**Verification evidence:** On `aliensserver`, a clean `docker build --no-cache -t alt-data-context-audit:local .` succeeded with a 24.23 kB build context. The resulting image passed assertions that `/app/.env`, `/app/.git`, `/app/.venv`, `/app/.pytest_cache`, `/app/data`, and `/app/backups` are absent, while application source and migration `0005_market_price_not_null.py` are present. No secret values were printed. The production Compose configuration remains unchanged and continues to provide runtime configuration through `env_file: .env`; its runtime smoke output should be retained with the deployment record.
+
+**Pre-fix exposure evidence:** An earlier server build of `traffic-and-market-data-model-ingestor:latest` used a 2-byte `.dockerignore`, transferred a 13.80 MB build context, and used the broad `COPY . ./` Dockerfile instruction. Since Compose on that server uses a local `.env`, that previously built image may contain `/app/.env`. No secret value was inspected or printed. Rebuild the official `ingestor` tag from the corrected context before running another scheduled job, then retire the older image according to the server's normal image-cleanup procedure.
 
 ### P1 — Backup handling is manual, local-only, and lacks restore proof
 
@@ -90,6 +105,11 @@ It is not yet a production-quality quantitative-research data platform. Point-in
 **Smallest reasonable correction:** Use a dedicated least-privilege user with timeouts/hardening. Define freshness/failure SLOs, durable status/metrics, and alerts. Preserve the correct no-aggressive-retry policy for Travel Midwest.
 
 ### P2 — Tests are uneven; real PostgreSQL migration validation is not mandatory in the ordinary local run
+
+**Update:** Added lifecycle and gate integration tests, schema/model parity,
+actual uniqueness enforcement, test-database guards, and GitHub Actions using
+`deploy/validate-isolated.sh`. Required CI mode fails on skips. The original
+source text below describes the audit baseline; CI execution is pending push.
 
 **Evidence:** This audit's virtual-environment run produced **11 passed, 4 skipped**; the four skips were [`test_migrations_postgres.py`](../tests/test_migrations_postgres.py) because no Docker daemon was available. Other persistence tests use SQLite `Base.metadata.create_all()` (for example [`test_yahoo_finance.py`](../tests/test_yahoo_finance.py#L40)). No tracked CI workflow exists. There is no test of `BaseIngestor.run()` transaction paths, provider auth failure, Compose, systemd, backup, or restore.
 
@@ -130,6 +150,12 @@ It is not yet a production-quality quantitative-research data platform. Point-in
 **Smallest reasonable correction:** Add only query-driven indexes and lightweight status/counter constraints, with migration tests.
 
 ## Remediated migration finding
+
+**New parity issue found and corrected in forward migration `0007`:** The ORM
+inherits `traffic_cameras.created_at`, but explicit historical `0002` omitted
+that column. `0007` backfills from `first_seen_at` only when the column is missing
+and preserves existing legacy values. A whole-model column/nullability test and
+both camera upgrade cases now cover this gap. `0001`–`0005` remain unchanged.
 
 The previous migration-reproducibility P1 is **verified remediated in this checkout**. `0001` and `0002` contain immutable explicit DDL; `0005` safely reconciles nullable OHLCV fields; and the Postgres-only test suite guards historical migration isolation and upgrade behavior. The local audit environment could not execute Docker-dependent tests, so their source was inspected and execution remains required in Docker/CI. This is no longer an open migration-design finding.
 

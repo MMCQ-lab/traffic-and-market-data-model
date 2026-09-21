@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import json
+import logging
 import time
 import httpx
 from typing import Any
@@ -11,6 +12,8 @@ from sqlalchemy import select
 
 from src.alt_data.ingestion.base import BaseIngestor
 from src.alt_data.models import DataSource, MarketPrice
+
+logger = logging.getLogger(__name__)
 
 
 class YahooFinanceClient:
@@ -29,18 +32,16 @@ class YahooFinanceClient:
         timestamps = result.get("timestamp", [])
         quote = result["indicators"]["quote"][0]
         adjusted = result["indicators"].get("adjclose", [{"adjclose": []}])[0].get("adjclose", [])
+        arrays = [quote.get(field) for field in ("open", "high", "low", "close", "volume")]
+        if any(not isinstance(values, list) or len(values) != len(timestamps) for values in arrays):
+            raise ValueError("Yahoo Finance returned mismatched OHLCV arrays")
+        if not isinstance(adjusted, list) or len(adjusted) != len(timestamps):
+            raise ValueError("Yahoo Finance returned missing or mismatched adjusted-close data")
         records = []
         for i, timestamp in enumerate(timestamps):
-            adjusted_close = adjusted[i] if i < len(adjusted) else quote["close"][i]
-            values = (
-                quote["open"][i], quote["high"][i], quote["low"][i],
-                quote["close"][i], adjusted_close, quote["volume"][i],
-            )
-            # Yahoo occasionally includes an incomplete daily bar. It cannot
-            # represent a complete OHLCV observation, so exclude it rather
-            # than failing an otherwise valid scheduled ingestion.
-            if any(value is None for value in values):
-                continue
+            adjusted_close = adjusted[i]
+            # Keep incomplete records for validation to count/report. Never
+            # silently substitute unadjusted prices for adjusted history.
             records.append({
                 "observed_at": datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(),
                 "open": quote["open"][i], "high": quote["high"][i], "low": quote["low"][i],
@@ -51,19 +52,22 @@ class YahooFinanceClient:
 
 
 def _as_decimal(value: Any) -> Decimal:
-    if value is None:
-        raise ValueError("Market price contains a null OHLC value")
-    return Decimal(str(value))
+    try:
+        result = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError("Market value must be numeric") from exc
+    if not result.is_finite():
+        raise ValueError("Market value must be finite")
+    return result
 
 
 def _as_observed_at(index_value: Any) -> datetime:
     if hasattr(index_value, "to_pydatetime"):
         index_value = index_value.to_pydatetime()
-    if isinstance(index_value, date) and not isinstance(index_value, datetime):
-        return datetime(index_value.year, index_value.month, index_value.day, tzinfo=timezone.utc)
-    if isinstance(index_value, datetime):
-        return index_value.replace(tzinfo=timezone.utc) if index_value.tzinfo is None else index_value.astimezone(timezone.utc)
-    return datetime.fromisoformat(str(index_value)).replace(tzinfo=timezone.utc)
+    result = index_value if isinstance(index_value, datetime) else datetime.fromisoformat(str(index_value))
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("Market timestamp must include a timezone")
+    return result.astimezone(timezone.utc)
 
 
 class YahooFinanceMarketIngestor(BaseIngestor):
@@ -90,8 +94,8 @@ class YahooFinanceMarketIngestor(BaseIngestor):
                     "observed_at": _as_observed_at(index_value).isoformat(),
                     "open": float(row["Open"]), "high": float(row["High"]),
                     "low": float(row["Low"]), "close": float(row["Close"]),
-                    "adjusted_close": float(row.get("Adj Close", row["Close"])),
-                    "volume": int(row["Volume"]),
+                    "adjusted_close": float(row["Adj Close"]),
+                    "volume": row["Volume"],
                 })
         raw = json.dumps(records, separators=(",", ":")).encode()
         url = f"{self.source_url}/quote/{self.symbol}/history"
@@ -101,17 +105,29 @@ class YahooFinanceMarketIngestor(BaseIngestor):
         if not isinstance(payload, list) or not payload:
             raise ValueError("Unexpected Yahoo Finance response shape")
         rows = []
+        incomplete = 0
         for item in payload:
+            if not isinstance(item, dict):
+                raise ValueError("Market observation must be an object")
             fields = ("open", "high", "low", "close", "adjusted_close", "volume")
             if any(item.get(field) is None for field in fields):
+                incomplete += 1
                 continue
-            rows.append({
+            volume = _as_decimal(item["volume"])
+            if volume < 0 or volume != volume.to_integral_value() or volume > 9223372036854775807:
+                raise ValueError("Market volume must be a nonnegative BIGINT")
+            row = {
                 "symbol": self.symbol,
-                "observed_at": datetime.fromisoformat(item["observed_at"]),
+                "observed_at": _as_observed_at(item["observed_at"]),
                 "open": _as_decimal(item["open"]), "high": _as_decimal(item["high"]),
                 "low": _as_decimal(item["low"]), "close": _as_decimal(item["close"]),
-                "adjusted_close": _as_decimal(item["adjusted_close"]), "volume": int(item["volume"]),
-            })
+                "adjusted_close": _as_decimal(item["adjusted_close"]), "volume": int(volume),
+            }
+            if not row["low"] <= min(row["open"], row["close"]) <= max(row["open"], row["close"]) <= row["high"]:
+                raise ValueError("Market OHLC values are inconsistent")
+            rows.append(row)
+        if incomplete:
+            logger.warning("Incomplete market bars: symbol=%s rejected=%s", self.symbol, incomplete)
         if not rows:
             raise ValueError("Yahoo Finance returned no complete daily OHLCV observations")
         return rows

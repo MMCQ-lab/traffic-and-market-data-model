@@ -5,7 +5,12 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . ./
+# Explicit runtime inputs add a second boundary beyond .dockerignore.
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+COPY tests/ ./tests/
 
 ENV PYTHONUNBUFFERED=1
 

@@ -11,6 +11,12 @@ class CreatedAt:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class ProviderRequestGate(Base):
+    __tablename__ = "provider_request_gates"
+    provider: Mapped[str] = mapped_column(String(100), primary_key=True)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class DataSource(CreatedAt, Base):
     __tablename__ = "data_sources"
     id: Mapped[int] = mapped_column(primary_key=True)

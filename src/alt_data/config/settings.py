@@ -1,4 +1,7 @@
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -28,7 +31,12 @@ class Settings(BaseSettings):
 
     @property
     def resolved_database_url(self) -> str:
-        return self.database_url or f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        return self.database_url or URL.create(
+            "postgresql+psycopg", username=self.postgres_user,
+            password=self.postgres_password, host=self.postgres_host,
+            port=self.postgres_port, database=self.postgres_db,
+        ).render_as_string(hide_password=False)
 
 
-settings = Settings()
+# An empty override disables dotenv loading for tests and controlled runtimes.
+settings = Settings(_env_file=os.environ.get("ALT_DATA_ENV_FILE", ".env") or None)

@@ -53,8 +53,12 @@ class TravelMidwestCameraIngestor(BaseIngestor):
             raise ValueError("Expected XML bytes from Travel Midwest camera feed")
         raw = bytes(payload).lstrip()
         if raw.startswith(b"<"):
-            return parse_camera_feed(raw)
-        return parse_camera_csv(raw)
+            rows = parse_camera_feed(raw)
+        else:
+            rows = parse_camera_csv(raw)
+        if not rows:
+            raise ValueError("Travel Midwest returned no recognizable camera records")
+        return rows
 
     def save(self, source: DataSource, rows: list[dict[str, Any]], retrieved_at: datetime) -> tuple[int, int]:
         transport_source = self.session.scalar(select(TransportationSource).where(TransportationSource.name == self.source_name))

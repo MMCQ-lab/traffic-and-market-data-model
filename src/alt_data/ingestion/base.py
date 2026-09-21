@@ -46,6 +46,7 @@ class BaseIngestor(ABC):
         # Persist the run before the network call so failures can be recorded
         # even when fetching raises before any payload is available.
         self.session.commit()
+        run_id = run.id
         try:
             url, status, content_type, raw, payload = self.fetch()
             retrieved_at = datetime.now(timezone.utc)
@@ -54,6 +55,9 @@ class BaseIngestor(ABC):
                 retrieved_at=retrieved_at, payload_bytes=len(raw),
                 payload=raw[:settings.raw_payload_max_bytes].decode("utf-8", errors="replace"),
             ))
+            # Preserve fetched evidence even if parsing or normalized writes fail.
+            # Observation writes and successful run status remain atomic below.
+            self.session.commit()
             rows = self.validate(payload)
             inserted, skipped = self.save(source, rows, retrieved_at)
             run.rows_received, run.rows_inserted, run.rows_skipped = len(rows), inserted, skipped
@@ -62,7 +66,7 @@ class BaseIngestor(ABC):
             logger.info("Ingestion succeeded: source=%s run_id=%s received=%s inserted=%s skipped=%s", self.source_name, run.id, len(rows), inserted, skipped)
         except Exception as exc:
             self.session.rollback()
-            run = self.session.get(IngestionRun, run.id)
+            run = self.session.get(IngestionRun, run_id)
             if run is None:
                 raise RuntimeError("Ingestion run disappeared while recording failure") from exc
             run.status, run.error_message, run.finished_at = "failed", str(exc), datetime.now(timezone.utc)

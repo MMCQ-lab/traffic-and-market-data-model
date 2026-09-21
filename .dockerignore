@@ -5,26 +5,33 @@
 .gitignore
 
 # Local Python environments and generated Python/test artifacts.
-.venv/
-venv/
+**/.venv/
+**/venv/
 env/
 __pycache__/
 **/__pycache__/
-*.py[cod]
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/.coverage.*
+**/htmlcov/
 
 # Local data, backups, and generated work products.
 data/
 backups/
 work/
 outputs/
-*.dump
-*.dump.*
-*.sql.gz
-*.bak
+**/*.dump
+**/*.dump.*
+**/*.sql
+**/*.sql.gz
+**/*.bak
+**/*.pem
+**/*.key
+**/.env
+**/.env.*
 
 # Editor and operating-system artifacts.
 .vscode/

@@ -5,11 +5,18 @@ from src.alt_data.database.base import Base
 from src.alt_data.ingestion.traffic.cameras import TravelMidwestCameraIngestor
 from src.alt_data.ingestion.traffic.travel_midwest import parse_camera_feed
 from src.alt_data.models import DataSource, TrafficCamera
+import pytest
 
 
 FIXTURE = b'''<cameras><camera id="I-90-001"><CameraLocation>Jane Byrne Interchange</CameraLocation><CameraDirection>WB</CameraDirection><y>41.8786</y><x>-87.6359</x><SnapShot>https://example.test/cam.jpg</SnapShot></camera></cameras>'''
 CSV_FIXTURE = b'''CameraID,CameraLocation,CameraDirection,y,x,SnapShot,WarningAge,TooOld,AgeInMinutes,VideoUrl\nI-90-002,Kennedy Expressway,EB,41.8951,-87.6553,https://example.test/cam2.jpg,false,false,3,https://example.test/cam.m3u8\n'''
 DOCUMENTED_CSV_FIXTURE = b'''ImgPath,CameraLocation,CameraDirection,y,x,SnapShot,WarningAge,TooOld,AgeInMinutes,VideoUrl\n,Jane Byrne Interchange,NONE,41.8786,-87.6359,https://example.test/cam.jpg,false,false,1,\n'''
+
+
+@pytest.mark.parametrize("payload", [b"", b"unexpected,headers\n1,2", b"<html><body>Login required</body></html>"])
+def test_unrecognized_or_empty_feed_is_not_a_success(payload):
+    with pytest.raises(ValueError, match="no recognizable"):
+        TravelMidwestCameraIngestor(None).validate(payload)
 
 
 def test_parse_camera_feed_preserves_metadata() -> None:

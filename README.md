@@ -2,7 +2,7 @@
 
 For a running project journal, current milestones, learned setup notes, and the server workflow, see [Project Notes](docs/PROJECT_NOTES.md).
 
-Phase 1 is a small, reliable ingestion foundation for public alternative and macroeconomic data. Phase 2 adds normalized transportation metadata and a live Travel Midwest / IDOT Gateway camera feed.
+This is a deployed research prototype for public alternative and macroeconomic data, camera metadata, and daily market prices. See [the engineering review](docs/REVIEW.md) for remaining reliability and research-data limitations.
 
 It deliberately does **not** include computer vision, forecasting, trading, or a dashboard.
 
@@ -10,7 +10,9 @@ It deliberately does **not** include computer vision, forecasting, trading, or a
 
 `Public API/feed -> ingestor -> validation/transformation -> PostgreSQL`
 
-Each execution records a source-specific `ingestion_run`, metadata plus a bounded raw response in `raw_payloads`, and normalized values in `economic_indicators`. All system timestamps are UTC. The `published_at`, `observed_at`, and `retrieved_at` fields distinguish source availability, the event period, and our receipt time to support later look-ahead-bias controls.
+Ingestion records a source-specific `ingestion_run` before fetching. A successful fetch is committed to `raw_payloads` before validation, so its bounded payload survives validation/write failures. Normalized observations and successful run status commit together; partial observation writes roll back on failure. Yahoo's payload is the adapter's normalized JSON, not the original HTTP response. Payloads larger than the configured limit are truncated and cannot serve as a complete replay archive.
+
+`observed_at` is the observation period, and `retrieved_at` is our receipt time. Market and GDP `published_at` values are currently unknown. These tables **are not yet point-in-time research datasets**: availability rules, revised data vintages, and a tested as-of query boundary remain to be implemented.
 
 ## Schema
 
@@ -55,7 +57,9 @@ The run should report one successful ingestion run, one raw payload record, and 
 
 The transportation layer adds provider-neutral tables for `transportation_sources`, `traffic_cameras`, `camera_snapshots`, `traffic_sensors`, `traffic_observations`, `transportation_incidents`, and `construction_events`. Source timestamps, publication timestamps, and retrieval timestamps are separate UTC fields where the feed supplies them. Camera image bytes are intentionally not stored in PostgreSQL; `camera_snapshots.storage_path` is reserved for files under `CAMERA_STORAGE_PATH`.
 
-Travel Midwest / IDOT Gateway is the primary Chicago live source. Registration is required for its XML and image feeds. Configure the returned credentials in `.env`; never commit them. The public camera metadata CSV endpoint is `https://travelmidwest.com/lmiga/cameraInfo.csv`. The IDOT reuse policy requires each XML feed and individual camera image to be requested no more than once every five minutes and requires attribution: “Gateway traffic information courtesy of the Illinois Department of Transportation.” The client enforces a process-level five-minute minimum interval, does not immediately retry failed feed requests, and refuses to run without a configured feed URL.
+Travel Midwest / IDOT Gateway is the primary Chicago live source. Registration is required for its XML and image feeds. Configure the returned credentials in `.env`; never commit them. The public camera metadata CSV endpoint is `https://travelmidwest.com/lmiga/cameraInfo.csv`. The IDOT reuse policy requires each XML feed and individual camera image to be requested no more than once every five minutes and requires attribution: “Gateway traffic information courtesy of the Illinois Department of Transportation.”
+
+The client uses a PostgreSQL-backed, provider-wide gate with a minimum 300-second cooldown. It commits the claim before feed I/O, holds an advisory lock during the request, and records completion even after an HTTP failure. Separate jobs using the same database share this state; rolling back ingestion does not erase the claim. Missing gate schema or database errors prevent feed requests. Migration `0006` is required before enabling this client. Do not run parallel collectors against separate databases: they do not share a gate. Authentication precedes the gate; the gate covers feed requests, not login requests.
 
 After registering, set `TRAVEL_MIDWEST_CAMERA_FEED_URL=https://travelmidwest.com/lmiga/cameraInfo.csv` in `.env` and run:
 
@@ -77,7 +81,7 @@ The City of Chicago Open Data portal may supplement this source for historical o
 
 ## Current status
 
-Phases 1 and 2 are complete. Phase 3A has loaded the initial market universe on the Ubuntu server. Camera image download/storage and computer vision remain intentionally deferred; weather ingestion and point-in-time temporal joins are the next data milestones.
+GDP, camera-metadata, and market ingestion are implemented; earlier server runs demonstrated camera metadata and the initial market universe. New changes in this checkout require isolated validation before production deployment. Camera images, weather, point-in-time joins, revision history, monitoring/alerts, and tested off-host recovery remain incomplete.
 
 ## Linux server operation
 
@@ -109,8 +113,20 @@ ORDER BY observed_at DESC
 LIMIT 20;
 ```
 
-Run the command a second time to confirm `rows_inserted = 0` and `rows_skipped` equals the existing history. Do not build temporal joins or predictive models until this single-instrument path is verified.
+Run the command a second time to confirm `rows_inserted = 0` and `rows_skipped` equals the existing history. The batch tries all configured symbols with independent sessions and returns a nonzero exit code if any failed. Incomplete bars are logged/skipped; invalid OHLC ordering, nonfinite values, invalid volumes, and timezone-free timestamps are rejected. Missing adjusted closes are not replaced with unadjusted closes. Existing observations are still skipped rather than revised: this is not a vintage store, and simultaneous ingestors still need conflict-safe writes.
+
+## Tests and isolated validation
+
+Local tests disable dotenv loading before application imports. Run `python -m pytest -q -rs -p no:cacheprovider`. PostgreSQL tests may skip on a workstation without Docker; those skips do not establish migration correctness.
+
+On Linux with Docker, run the same validation used by GitHub Actions:
+
+```bash
+bash deploy/validate-isolated.sh
+```
+
+This builds a temporary image, checks its filesystem and a synthetic runtime configuration override, starts an isolated PostgreSQL 16 instance with no published ports or production volumes, runs the entire suite with skips prohibited, and cleans up only its own resources. It does not load production `.env`, use production Compose, or deploy migrations to production. See [the hardening notes](docs/HARDENING.md) for deployment sequencing and limitations.
 
 ## Next step
 
-Add one operationally useful source—such as National Weather Service observations or a selected city DOT camera feed—by subclassing `BaseIngestor`, then add its migration and transformation tests.
+Complete isolated PostgreSQL/image validation, then address availability/vintage semantics and recovery before adding sources or modeling.

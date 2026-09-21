@@ -1,0 +1,20 @@
+name: Tests and image hygiene
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  postgres-and-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed harmless excluded-file sentinels
+        run: |
+          mkdir -p data backups
+          printf 'not-a-secret\n' > .env
+          printf 'not-a-secret\n' > .env.audit
+          printf 'not-a-secret\n' > backups/audit.dump
+          printf 'not-a-secret\n' > data/audit.txt
+      - name: Validate migrations, runtime, and image using disposable PostgreSQL
+        run: bash deploy/validate-isolated.sh

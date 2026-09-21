@@ -1,161 +1,7 @@
-"""PostgreSQL-only migration integration tests using a disposable Docker DB."""
-
-from __future__ import annotations
-
-import os
-from pathlib import Path
-import shutil
-import socket
-import subprocess
-import sys
-import time
-import uuid
-
-import psycopg
+"""Real PostgreSQL migration contracts; fixture is shared with runtime tests."""
 import pytest
 
-
-ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_OHLCV = ("open", "high", "low", "adjusted_close", "volume")
-
-
-class PostgresTestDatabase:
-    def __init__(self, url: str, config_path: Path, workdir: Path) -> None:
-        self.url = url
-        self.config_path = config_path
-        self.workdir = workdir
-
-    @property
-    def psycopg_url(self) -> str:
-        return self.url.replace("postgresql+psycopg://", "postgresql://", 1)
-
-    def connect(self):
-        return psycopg.connect(self.psycopg_url)
-
-    def upgrade(self, target: str = "head", future_metadata_probe: bool = False) -> subprocess.CompletedProcess[str]:
-        code = (
-            """
-import sys
-from alembic import command
-from alembic.config import Config
-from sqlalchemy import Column, Integer, Table
-from src.alt_data.database.base import Base
-
-Table('future_metadata_probe', Base.metadata, Column('id', Integer, primary_key=True))
-command.upgrade(Config(sys.argv[1]), sys.argv[2])
-"""
-            if future_metadata_probe
-            else """
-import sys
-from alembic import command
-from alembic.config import Config
-
-command.upgrade(Config(sys.argv[1]), sys.argv[2])
-"""
-        )
-        environment = os.environ.copy()
-        environment["DATABASE_URL"] = self.url
-        environment["PYTHONPATH"] = str(ROOT)
-        return subprocess.run(
-            [sys.executable, "-c", code, str(self.config_path), target],
-            cwd=self.workdir,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-
-def _write_alembic_config(tmp_path: Path, url: str) -> Path:
-    config_path = tmp_path / "alembic.ini"
-    config_path.write_text(
-        "[alembic]\n"
-        f"script_location = {(ROOT / 'alembic').as_posix()}\n"
-        f"prepend_sys_path = {ROOT.as_posix()}\n"
-        f"sqlalchemy.url = {url}\n",
-        encoding="utf-8",
-    )
-    return config_path
-
-
-def _reset_test_database(database: PostgresTestDatabase) -> None:
-    """Reset only the explicitly supplied disposable test database."""
-    with database.connect() as connection:
-        connection.autocommit = True
-        with connection.cursor() as cursor:
-            cursor.execute("DROP SCHEMA IF EXISTS public CASCADE")
-            cursor.execute("CREATE SCHEMA public")
-
-
-def _unused_local_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _docker_available() -> bool:
-    return shutil.which("docker") is not None and subprocess.run(
-        ["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
-    ).returncode == 0
-
-
-@pytest.fixture()
-def postgres_database(tmp_path: Path) -> PostgresTestDatabase:
-    external_url = os.environ.get("TEST_DATABASE_URL")
-    if external_url:
-        database = PostgresTestDatabase(external_url, _write_alembic_config(tmp_path, external_url), tmp_path)
-        _reset_test_database(database)
-        try:
-            yield database
-        finally:
-            _reset_test_database(database)
-        return
-
-    if not _docker_available():
-        pytest.skip("Docker is required for PostgreSQL migration integration tests")
-
-    port = _unused_local_port()
-    container_name = f"alt-data-migration-test-{uuid.uuid4().hex}"
-    started = subprocess.run(
-        [
-            "docker", "run", "--detach", "--rm", "--name", container_name,
-            "--env", "POSTGRES_DB=migration_test",
-            "--env", "POSTGRES_USER=migration_test",
-            "--env", "POSTGRES_PASSWORD=migration_test",
-            "--publish", f"127.0.0.1:{port}:5432",
-            "postgres:16",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if started.returncode != 0:
-        pytest.skip(f"Could not start disposable PostgreSQL container: {started.stderr.strip()}")
-
-    try:
-        deadline = time.monotonic() + 45
-        while time.monotonic() < deadline:
-            ready = subprocess.run(
-                ["docker", "exec", container_name, "pg_isready", "-U", "migration_test", "-d", "migration_test"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            if ready.returncode == 0:
-                break
-            time.sleep(0.5)
-        else:
-            pytest.fail("Disposable PostgreSQL container did not become ready")
-
-        url = f"postgresql+psycopg://migration_test:migration_test@127.0.0.1:{port}/migration_test"
-        yield PostgresTestDatabase(url, _write_alembic_config(tmp_path, url), tmp_path)
-    finally:
-        subprocess.run(
-            ["docker", "rm", "--force", container_name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+from tests.postgres_support import PostgresTestDatabase, ROOT, REQUIRED_OHLCV
 
 
 def _current_revision(database: PostgresTestDatabase) -> str:
@@ -192,7 +38,7 @@ def _insert_market_price(database: PostgresTestDatabase, *, open_value: str | No
 def test_empty_postgres_upgrades_from_zero_to_head_with_final_contract(postgres_database: PostgresTestDatabase) -> None:
     result = postgres_database.upgrade()
     assert result.returncode == 0, result.stderr
-    assert _current_revision(postgres_database) == "0005_market_price_not_null"
+    assert _current_revision(postgres_database) == "0007_camera_created_at"
     assert _required_nullability(postgres_database) == {column: "NO" for column in REQUIRED_OHLCV}
     with postgres_database.connect() as connection, connection.cursor() as cursor:
         cursor.execute("SELECT conname FROM pg_constraint WHERE conrelid = 'market_prices'::regclass AND contype = 'u'")
@@ -204,7 +50,7 @@ def test_current_0004_database_upgrades_in_place_and_preserves_rows(postgres_dat
     _insert_market_price(postgres_database, open_value="100.0")
     assert _required_nullability(postgres_database)["open"] == "YES"
 
-    result = postgres_database.upgrade()
+    result = postgres_database.upgrade("0005_market_price_not_null")
     assert result.returncode == 0, result.stderr
     assert _current_revision(postgres_database) == "0005_market_price_not_null"
     assert _required_nullability(postgres_database) == {column: "NO" for column in REQUIRED_OHLCV}
@@ -233,6 +79,46 @@ def test_future_base_metadata_cannot_create_historical_tables(postgres_database:
     with postgres_database.connect() as connection, connection.cursor() as cursor:
         cursor.execute("SELECT to_regclass('public.future_metadata_probe')")
         assert cursor.fetchone()[0] is None
+
+
+def test_migrated_tables_match_model_columns_and_nullability(postgres_database):
+    from sqlalchemy import create_engine, inspect
+    from src.alt_data.database.base import Base
+    from src.alt_data.models import all_models  # noqa: F401
+    assert postgres_database.upgrade().returncode == 0
+    engine = create_engine(postgres_database.url)
+    try:
+        inspector = inspect(engine)
+        for table in Base.metadata.sorted_tables:
+            actual = {column["name"]: column["nullable"] for column in inspector.get_columns(table.name)}
+            expected = {column.name: column.nullable for column in table.columns}
+            assert actual == expected, table.name
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("legacy_column", [False, True])
+def test_camera_timestamp_reconciliation_preserves_metadata(postgres_database, legacy_column):
+    assert postgres_database.upgrade("0006_provider_request_gate").returncode == 0
+    with postgres_database.connect() as connection:
+        connection.execute("INSERT INTO transportation_sources (name, source_type, source_url) VALUES ('fixture', 'camera', 'https://example.test')")
+        connection.execute("INSERT INTO traffic_cameras (source_id, external_camera_id, active, first_seen_at, last_seen_at) VALUES (1, 'cam', true, '2025-01-01T00:00:00+00:00', '2025-01-02T00:00:00+00:00')")
+        if legacy_column:
+            connection.execute("ALTER TABLE traffic_cameras ADD COLUMN created_at timestamptz NOT NULL DEFAULT '2024-12-31T00:00:00+00:00'")
+    result = postgres_database.upgrade()
+    assert result.returncode == 0, result.stderr
+    with postgres_database.connect() as connection:
+        rows = connection.execute("SELECT external_camera_id, created_at::date::text FROM traffic_cameras").fetchall()
+        assert rows == [("cam", "2024-12-31" if legacy_column else "2025-01-01")]
+
+
+def test_market_unique_constraint_actually_rejects_duplicate(postgres_database):
+    import psycopg
+    assert postgres_database.upgrade().returncode == 0
+    _insert_market_price(postgres_database, open_value="100.0")
+    with postgres_database.connect() as connection:
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            connection.execute("INSERT INTO market_prices (source_id, symbol, observed_at, retrieved_at, open, high, low, close, adjusted_close, volume) SELECT source_id, symbol, observed_at, retrieved_at, open, high, low, close, adjusted_close, volume FROM market_prices")
 
 
 @pytest.mark.parametrize("revision", ["0001_initial_schema.py", "0002_transportation_schema.py"])

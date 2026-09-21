@@ -8,7 +8,7 @@ from src.alt_data.database.base import Base
 from src.alt_data.models import all_models  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.resolved_database_url)
+config.set_main_option("sqlalchemy.url", settings.resolved_database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 

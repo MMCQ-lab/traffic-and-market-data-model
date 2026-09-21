@@ -8,6 +8,13 @@ Build a research-ready alternative-data platform that can eventually align trans
 
 ## Current snapshot
 
+Code update (2026-09-21): reliability improvements are prepared locally, including
+the database-backed request gate, stronger validation, failure isolation, and
+PostgreSQL CI. These changes are not confirmed deployed. See
+[hardening notes](HARDENING.md) for tests, remaining gaps, and the deployment gate.
+The milestones below describe earlier project history, not proof of current
+production health.
+
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Ingestion foundation | Complete | PostgreSQL, SQLAlchemy, Alembic, source/run/payload audit trail, tests |

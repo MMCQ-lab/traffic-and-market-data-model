@@ -4,15 +4,13 @@ import logging
 import csv
 import io
 import hashlib
-import threading
-import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
 from src.alt_data.config.settings import settings
+from src.alt_data.ingestion.request_gate import PostgresRequestGate
 
 logger = logging.getLogger(__name__)
 
@@ -20,22 +18,17 @@ logger = logging.getLogger(__name__)
 class TravelMidwestClient:
     """Authenticated, rate-limited client for registered Travel Midwest feeds."""
 
-    _last_request: dict[str, float] = {}
-    _lock = threading.Lock()
-
-    def __init__(self, username: str | None = None, password: str | None = None, min_interval: int | None = None) -> None:
+    def __init__(self, username: str | None = None, password: str | None = None, min_interval: int | None = None, gate=None) -> None:
         self.username = username or settings.travel_midwest_username
         self.password = password or settings.travel_midwest_password
         self.min_interval = min_interval if min_interval is not None else settings.travel_midwest_min_interval_seconds
+        if self.min_interval < 300:
+            raise ValueError("Travel Midwest request interval must be at least 300 seconds")
+        self.gate = gate if gate is not None else PostgresRequestGate()
 
     def fetch_feed(self, url: str) -> tuple[int, str, bytes, str | None]:
         if not url:
             raise ValueError("Travel Midwest feed URL is not configured")
-        with self._lock:
-            elapsed = time.monotonic() - self._last_request.get(url, 0.0)
-            if elapsed < self.min_interval:
-                raise RuntimeError(f"Travel Midwest rate limit: retry in {self.min_interval - elapsed:.0f}s")
-            self._last_request[url] = time.monotonic()
         headers = {"User-Agent": "alternative-data-platform/0.1 (registered research client)"}
         with httpx.Client(timeout=30.0, headers=headers) as client:
             if self.username and self.password:
@@ -44,8 +37,11 @@ class TravelMidwestClient:
             # Travel Midwest permits an XML/CSV feed request no more than once
             # every five minutes. A transport retry may still reach the source,
             # so record the failure and let the scheduler make the next attempt.
-            response = client.get(url)
-            response.raise_for_status()
+            # A conservative provider-wide gate avoids URL aliases bypassing the
+            # interval. Claim immediately before feed I/O, after authentication.
+            with self.gate.acquire("travel_midwest_feeds", self.min_interval):
+                response = client.get(url)
+                response.raise_for_status()
             logger.info("Travel Midwest request succeeded: status=%s url=%s", response.status_code, url)
             return response.status_code, response.text, response.content, response.headers.get("content-type")
 
