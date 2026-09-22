@@ -13,6 +13,7 @@ from src.alt_data.ingestion.traffic.link_traffic import (
     MPS_TO_MPH,
     TravelMidwestLinkTrafficIngestor,
     parse_link_traffic_feed,
+    validate_link_traffic_url,
 )
 from src.alt_data.ingestion.traffic.travel_midwest import TravelMidwestClient
 from src.alt_data.models import DataSource, TrafficObservation, TrafficSensor
@@ -49,6 +50,12 @@ INVALID_ELEMENT = b"""
 """
 
 FEED = b"<com.gcmtravel.LinkTrafficReport>" + VALID_ELEMENT + INVALID_ELEMENT + b"</com.gcmtravel.LinkTrafficReport>"
+
+
+def test_link_traffic_url_must_select_the_documented_feed():
+    validate_link_traffic_url("https://travelmidwest.com/lmiga/LinkTrafficReport.xml.gz")
+    with pytest.raises(ValueError, match="LinkTrafficReport"):
+        validate_link_traffic_url("https://travelmidwest.com/lmiga/cameraInfo.csv")
 
 
 def test_parse_and_validate_link_traffic_uses_documented_units(caplog):

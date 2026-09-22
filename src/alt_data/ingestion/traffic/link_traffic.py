@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 import logging
 import xml.etree.ElementTree as ET
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
@@ -23,6 +24,7 @@ from src.alt_data.models import DataSource, TrafficObservation, TrafficSensor, T
 logger = logging.getLogger(__name__)
 
 MPS_TO_MPH = Decimal("2.2369362920544")
+LINK_TRAFFIC_PATH = "/lmiga/LinkTrafficReport.xml.gz"
 INVALID_LOCATION_STATUSES = {
     "LOCATION_NOT_VALIDATED",
     "LOCATION_UNRESOLVABLE_AUTO",
@@ -94,6 +96,22 @@ def _observed_at(value: str | None) -> datetime:
         raise ValueError("Link traffic timestamp is out of range") from exc
 
 
+def validate_link_traffic_url(url: str) -> None:
+    """Fail before network I/O if another Travel Midwest feed is configured."""
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "travelmidwest.com"
+        or parsed.path != LINK_TRAFFIC_PATH
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "TRAVEL_MIDWEST_TRAFFIC_FEED_URL must be "
+            "https://travelmidwest.com/lmiga/LinkTrafficReport.xml.gz"
+        )
+
+
 class TravelMidwestLinkTrafficIngestor(BaseIngestor):
     source_name = "travel_midwest_link_traffic"
     source_url = "https://travelmidwest.com"
@@ -106,6 +124,7 @@ class TravelMidwestLinkTrafficIngestor(BaseIngestor):
         url = settings.travel_midwest_traffic_feed_url
         if not url:
             raise ValueError("TRAVEL_MIDWEST_TRAFFIC_FEED_URL is required")
+        validate_link_traffic_url(url)
         status, _text_body, raw, content_type = self.client.fetch_feed(url, basic_auth=True)
         return url, status, content_type, raw, raw
 

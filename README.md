@@ -85,7 +85,7 @@ The City of Chicago Open Data portal may supplement this source for historical o
 
 Provider references: [traffic report fields](https://github.com/uic-gtis/gateway-docs/blob/main/user-guides-and-manuals/traffic-reports.md) and [historical archive](https://github.com/uic-gtis/gateway-docs/blob/main/user-guides-and-manuals/gateway-traffic-data-archive.md).
 
-Set `TRAVEL_MIDWEST_TRAFFIC_FEED_URL` only after confirming the approved account and endpoint, then perform a single manual run:
+After the account is approved, set `TRAVEL_MIDWEST_TRAFFIC_FEED_URL=https://travelmidwest.com/lmiga/LinkTrafficReport.xml.gz`, then perform a single manual run:
 
 ```powershell
 python -m scripts.ingest_travel_midwest_link_traffic
