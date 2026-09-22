@@ -147,6 +147,7 @@ def test_link_traffic_save_on_migrated_postgres(postgres_database):
 
 def test_download_feed_uses_basic_auth_and_decompresses_gzip(monkeypatch):
     requests = []
+    client_options = []
     compressed = gzip.compress(b"<com.gcmtravel.LinkTrafficReport />")
 
     @contextmanager
@@ -161,9 +162,11 @@ def test_download_feed_uses_basic_auth_and_decompresses_gzip(monkeypatch):
         return httpx.Response(200, content=compressed, headers={"content-type": "application/gzip"})
 
     real_client = httpx.Client
-    monkeypatch.setattr(httpx, "Client", lambda **kwargs: real_client(
-        transport=httpx.MockTransport(handler), **kwargs
-    ))
+    def mock_client(**kwargs):
+        client_options.append(kwargs)
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", mock_client)
     client = TravelMidwestClient(username="researcher", password="secret", gate=Gate())
     status, text_body, raw, _content_type = client.fetch_feed(
         "https://travelmidwest.com/lmiga/LinkTrafficReport.xml.gz", basic_auth=True
@@ -173,6 +176,12 @@ def test_download_feed_uses_basic_auth_and_decompresses_gzip(monkeypatch):
     assert raw == b"<com.gcmtravel.LinkTrafficReport />"
     assert text_body == raw.decode()
     assert requests[0].headers["authorization"].startswith("Basic ")
+    assert client_options[0]["timeout"].read == 120.0
+
+
+def test_read_timeout_must_be_positive():
+    with pytest.raises(ValueError, match="read timeout"):
+        TravelMidwestClient(read_timeout_seconds=0)
 
 
 def test_basic_auth_feed_requires_credentials_before_network():

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     travel_midwest_sensor_feed_url: str | None = None
     camera_storage_path: str = "data/cameras"
     travel_midwest_min_interval_seconds: int = 300
+    travel_midwest_read_timeout_seconds: float = 120.0
     market_symbols: str = "SPY,QQQ,DIA,IWM,IYT,XLI,AMZN,UPS,FDX,WMT,TGT,COST,XPO,CHRW,DAL,UAL,LUV,AAL,UNP,CSX,JBHT"
     # Kept for backwards-compatible single-symbol runs.
     market_symbol: str = "SPY"

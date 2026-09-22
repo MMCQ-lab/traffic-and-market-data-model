@@ -20,12 +20,26 @@ logger = logging.getLogger(__name__)
 class TravelMidwestClient:
     """Authenticated, rate-limited client for registered Travel Midwest feeds."""
 
-    def __init__(self, username: str | None = None, password: str | None = None, min_interval: int | None = None, gate=None) -> None:
+    def __init__(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        min_interval: int | None = None,
+        read_timeout_seconds: float | None = None,
+        gate=None,
+    ) -> None:
         self.username = username or settings.travel_midwest_username
         self.password = password or settings.travel_midwest_password
         self.min_interval = min_interval if min_interval is not None else settings.travel_midwest_min_interval_seconds
         if self.min_interval < 300:
             raise ValueError("Travel Midwest request interval must be at least 300 seconds")
+        self.read_timeout_seconds = (
+            read_timeout_seconds
+            if read_timeout_seconds is not None
+            else settings.travel_midwest_read_timeout_seconds
+        )
+        if self.read_timeout_seconds <= 0:
+            raise ValueError("Travel Midwest read timeout must be positive")
         self.gate = gate if gate is not None else PostgresRequestGate()
 
     def fetch_feed(self, url: str, *, basic_auth: bool = False) -> tuple[int, str, bytes, str | None]:
@@ -39,7 +53,8 @@ class TravelMidwestClient:
                 raise ValueError("Refusing to send Travel Midwest credentials to an untrusted URL")
         headers = {"User-Agent": "alternative-data-platform/0.1 (registered research client)"}
         auth = httpx.BasicAuth(self.username, self.password) if basic_auth else None
-        with httpx.Client(timeout=30.0, headers=headers, auth=auth) as client:
+        timeout = httpx.Timeout(connect=10.0, read=self.read_timeout_seconds, write=30.0, pool=10.0)
+        with httpx.Client(timeout=timeout, headers=headers, auth=auth) as client:
             # Travel Midwest permits an XML/CSV feed request no more than once
             # every five minutes. A transport retry may still reach the source,
             # so record the failure and let the scheduler make the next attempt.
