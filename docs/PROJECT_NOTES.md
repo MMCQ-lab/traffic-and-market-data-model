@@ -8,18 +8,17 @@ Build a research-ready alternative-data platform that can eventually align trans
 
 ## Current snapshot
 
-Code update (2026-09-21): reliability improvements are prepared locally, including
-the database-backed request gate, stronger validation, failure isolation, and
-PostgreSQL CI. These changes are not confirmed deployed. See
-[hardening notes](HARDENING.md) for tests, remaining gaps, and the deployment gate.
-The milestones below describe earlier project history, not proof of current
-production health.
+Production update (2026-09-21): the database-backed request gate, stronger
+validation, failure isolation, PostgreSQL CI, migrations through `0007`, and the
+IYT anomaly quarantine are deployed. The latest verified market batch completed
+all 21 symbols. The link-traffic adapter described below is new local work and
+is not yet deployed.
 
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Ingestion foundation | Complete | PostgreSQL, SQLAlchemy, Alembic, source/run/payload audit trail, tests |
 | Economic data | Complete | World Bank U.S. GDP ingestion; 66 observations in the initial run |
-| Chicago transportation | Complete | Authenticated Travel Midwest camera metadata ingestion; live feed persisted in PostgreSQL |
+| Chicago transportation | In progress | Monthly camera reference directory deployed; link-traffic observation adapter prepared locally |
 | Market data | Complete | 21-symbol daily OHLCV universe stored on the Ubuntu server |
 | Ubuntu hosting | Operational baseline | Docker PostgreSQL and ingestion container deployed; access is available over Tailscale/SSH |
 | Automatic schedules | Operational | Camera metadata monthly; weekday market timer after market close |
@@ -44,6 +43,17 @@ production health.
 - Added duplicate handling for repeated rows in one feed and across later runs.
 - Enforced the provider rule that camera metadata should be fetched no more than once every five minutes. After the provider confirmed that the camera directory changes infrequently, its schedule was reduced to 3:00 AM America/Chicago on the first day of each month. A timeout is recorded for the next scheduled attempt rather than retried immediately.
 - First Ubuntu server run persisted 4,568 camera records, with 119 duplicate feed rows skipped.
+- Travel Midwest confirmed that `WarningAge`, `TooOld`, and `AgeInMinutes` reflect file-transfer timestamps and are not reliable snapshot times. `VideoUrl` is a placeholder. These fields must not be used as traffic or availability signals.
+
+### Phase 2B — timestamped link traffic
+
+- Added a provider-isolated parser for the authenticated `LinkTrafficReport.xml.gz` format.
+- Normalized source timestamps, travel time, speed, volume, occupancy, and congestion into existing provider-neutral traffic tables.
+- Converted the documented speed unit from metres/second to mph explicitly.
+- Filtered provider-declared invalid location/data statuses and malformed or out-of-range measurements.
+- Added HTTP Basic Auth with a strict HTTPS `travelmidwest.com` destination check so credentials cannot leak through a bad endpoint configuration.
+- Kept this job unscheduled until PostgreSQL validation, a single live smoke test, and storage/cardinality sizing are complete.
+- Documented that the archive has five-minute snapshots back to 2004, with roughly 2019 onward best aligned to current formats; a narrow subset should be piloted before any bulk request.
 
 ### Phase 3A — market data
 
@@ -117,11 +127,11 @@ docker compose --env-file .env -f docker-compose.server.yml exec db \
 
 ## Next milestones
 
-1. Enable the Ubuntu systemd timers after confirming the server has the latest code.
-2. Create a verified PostgreSQL backup, then reboot `aliensserver` and verify Docker, PostgreSQL, and both timers resume unattended.
-3. Add a weather source with source timestamps and retrieval timestamps.
-4. Design point-in-time-correct temporal joins across market, camera, and weather data.
-5. Decide whether better marginal value comes from richer transportation data, camera snapshot storage, or baseline statistical research.
+1. Run isolated PostgreSQL validation for the link-traffic adapter, then perform one approved live smoke test without adding a timer.
+2. Measure live feed row counts and storage growth; choose a collection interval consistent with provider policy.
+3. Ask Travel Midwest for a narrow 2019+ historical pilot covering selected Chicago freight corridors rather than attempting the multi-terabyte archive.
+4. Add a weather source with source timestamps and retrieval timestamps.
+5. Design point-in-time-correct temporal joins across traffic, weather, and market data before modeling.
 
 ## Hosting operational-completion checklist
 

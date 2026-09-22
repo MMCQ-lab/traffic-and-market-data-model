@@ -59,7 +59,7 @@ The transportation layer adds provider-neutral tables for `transportation_source
 
 Travel Midwest / IDOT Gateway is the primary Chicago live source. Registration is required for its XML and image feeds. Configure the returned credentials in `.env`; never commit them. The public camera metadata CSV endpoint is `https://travelmidwest.com/lmiga/cameraInfo.csv`. The IDOT reuse policy requires each XML feed and individual camera image to be requested no more than once every five minutes and requires attribution: “Gateway traffic information courtesy of the Illinois Department of Transportation.”
 
-The client uses a PostgreSQL-backed, provider-wide gate with a minimum 300-second cooldown. It commits the claim before feed I/O, holds an advisory lock during the request, and records completion even after an HTTP failure. Separate jobs using the same database share this state; rolling back ingestion does not erase the claim. Missing gate schema or database errors prevent feed requests. Migration `0006` is required before enabling this client. Do not run parallel collectors against separate databases: they do not share a gate. Authentication precedes the gate; the gate covers feed requests, not login requests.
+The client uses a PostgreSQL-backed, provider-wide gate with a minimum 300-second cooldown. It commits the claim before feed I/O, holds an advisory lock during the request, and records completion even after an HTTP failure. Separate jobs using the same database share this state; rolling back ingestion does not erase the claim. Missing gate schema or database errors prevent feed requests. Migration `0006` is required before enabling this client. Do not run parallel collectors against separate databases: they do not share a gate. The public camera directory is fetched without login. Authenticated XML downloads use HTTP Basic Auth and refuse to send credentials to any host other than HTTPS `travelmidwest.com`.
 
 After registering, set `TRAVEL_MIDWEST_CAMERA_FEED_URL=https://travelmidwest.com/lmiga/cameraInfo.csv` in `.env` and run:
 
@@ -67,7 +67,7 @@ After registering, set `TRAVEL_MIDWEST_CAMERA_FEED_URL=https://travelmidwest.com
 python -m scripts.ingest_travel_midwest_cameras
 ```
 
-The camera CSV's supported `SnapShot` field is stored as `traffic_cameras.image_url`; `ImgPath` is intentionally ignored because Travel Midwest deprecated it. `WarningAge`, `TooOld`, `AgeInMinutes`, and `VideoUrl` are preserved as metadata. Normal tests use XML and CSV fixtures and never call Travel Midwest. Before live use, confirm the registration-provided endpoint and field names against the supplied documentation. Example DBeaver queries:
+The camera CSV's supported `SnapShot` field is stored as `traffic_cameras.image_url`; `ImgPath` is intentionally ignored because Travel Midwest deprecated it. `WarningAge`, `TooOld`, and `AgeInMinutes` are preserved only for source fidelity: the provider says they reflect file-transfer timestamps and are not reliable snapshot times. `VideoUrl` is a placeholder and is not a research signal. Camera metadata is a slowly changing reference directory, scheduled monthly, not a traffic time series. Normal tests use XML and CSV fixtures and never call Travel Midwest. Example DBeaver queries:
 
 ```sql
 SELECT COUNT(*) AS camera_count FROM public.traffic_cameras;
@@ -79,9 +79,23 @@ FROM public.ingestion_runs ORDER BY started_at DESC LIMIT 5;
 
 The City of Chicago Open Data portal may supplement this source for historical or enforcement-camera metadata, but it is not a substitute for live IDOT monitoring cameras. Live camera images remain subject to provider permissions, rate limits, and storage policy.
 
+### Link traffic observations
+
+`TravelMidwestLinkTrafficIngestor` is the next transportation-data adapter. It parses the documented authenticated `LinkTrafficReport.xml.gz` feed into provider-neutral `traffic_sensors` and `traffic_observations`. The adapter keeps the source observation timestamp separate from `retrieved_at`, converts documented metres/second to mph, and stores travel time (seconds), volume (vehicles/lane/hour), occupancy percentage, and congestion status. Records with provider-declared invalid data/location status, unknown congestion, missing IDs, invalid timestamps, nonfinite measurements, negative values, or occupancy outside 0–100 are rejected and counted in logs. The bounded raw XML is committed before validation.
+
+Provider references: [traffic report fields](https://github.com/uic-gtis/gateway-docs/blob/main/user-guides-and-manuals/traffic-reports.md) and [historical archive](https://github.com/uic-gtis/gateway-docs/blob/main/user-guides-and-manuals/gateway-traffic-data-archive.md).
+
+Set `TRAVEL_MIDWEST_TRAFFIC_FEED_URL` only after confirming the approved account and endpoint, then perform a single manual run:
+
+```powershell
+python -m scripts.ingest_travel_midwest_link_traffic
+```
+
+This job is intentionally **not scheduled or deployed yet**. Fixture tests do not contact the provider. A production timer should be added only after isolated PostgreSQL validation, one rate-compliant live smoke test, volume sizing, and confirmation of the desired collection interval. The provider archive contains the same report family at roughly five-minute intervals; only the past 24 hours are directly downloadable, while historical subsets require coordination with Travel Midwest.
+
 ## Current status
 
-GDP, camera-metadata, and market ingestion are implemented; earlier server runs demonstrated camera metadata and the initial market universe. New changes in this checkout require isolated validation before production deployment. Camera images, weather, point-in-time joins, revision history, monitoring/alerts, and tested off-host recovery remain incomplete.
+GDP, monthly camera-reference ingestion, and the 21-symbol market batch are deployed; the latest verified market batch completed all 21 symbols. The link-traffic adapter is implemented locally but is not yet validated on PostgreSQL or deployed. Camera images, weather, historical traffic backfill, point-in-time joins, revision history, monitoring/alerts, and tested off-host recovery remain incomplete.
 
 ## Linux server operation
 
@@ -129,4 +143,4 @@ This builds a temporary image, checks its filesystem and a synthetic runtime con
 
 ## Next step
 
-Complete isolated PostgreSQL/image validation, then address availability/vintage semantics and recovery before adding sources or modeling.
+Validate the link-traffic adapter in isolated PostgreSQL, perform one approved live smoke test, and size a narrow 2019+ historical pilot before enabling recurring traffic collection or modeling.

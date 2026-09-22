@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import csv
+import gzip
 import io
 import hashlib
 import xml.etree.ElementTree as ET
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -26,14 +28,18 @@ class TravelMidwestClient:
             raise ValueError("Travel Midwest request interval must be at least 300 seconds")
         self.gate = gate if gate is not None else PostgresRequestGate()
 
-    def fetch_feed(self, url: str) -> tuple[int, str, bytes, str | None]:
+    def fetch_feed(self, url: str, *, basic_auth: bool = False) -> tuple[int, str, bytes, str | None]:
         if not url:
             raise ValueError("Travel Midwest feed URL is not configured")
+        if basic_auth and (not self.username or not self.password):
+            raise ValueError("Travel Midwest download credentials are required")
+        if basic_auth:
+            parsed_url = urlsplit(url)
+            if parsed_url.scheme != "https" or parsed_url.hostname != "travelmidwest.com":
+                raise ValueError("Refusing to send Travel Midwest credentials to an untrusted URL")
         headers = {"User-Agent": "alternative-data-platform/0.1 (registered research client)"}
-        with httpx.Client(timeout=30.0, headers=headers) as client:
-            if self.username and self.password:
-                login = client.post("https://travelmidwest.com/lmiga/user/login.json", json={"username": self.username, "password": self.password})
-                login.raise_for_status()
+        auth = httpx.BasicAuth(self.username, self.password) if basic_auth else None
+        with httpx.Client(timeout=30.0, headers=headers, auth=auth) as client:
             # Travel Midwest permits an XML/CSV feed request no more than once
             # every five minutes. A transport retry may still reach the source,
             # so record the failure and let the scheduler make the next attempt.
@@ -43,7 +49,10 @@ class TravelMidwestClient:
                 response = client.get(url)
                 response.raise_for_status()
             logger.info("Travel Midwest request succeeded: status=%s url=%s", response.status_code, url)
-            return response.status_code, response.text, response.content, response.headers.get("content-type")
+            raw = response.content
+            if raw.startswith(b"\x1f\x8b"):
+                raw = gzip.decompress(raw)
+            return response.status_code, raw.decode("utf-8"), raw, response.headers.get("content-type")
 
 
 def _value(element: ET.Element, *names: str) -> str | None:
