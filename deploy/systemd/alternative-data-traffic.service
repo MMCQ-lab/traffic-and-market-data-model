@@ -1,0 +1,10 @@
+[Unit]
+Description=Ingest Travel Midwest roadway traffic observations
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/traffic-and-market-data-model
+ExecStart=/usr/bin/docker compose --env-file .env -f docker-compose.server.yml run --rm -T ingestor python -m scripts.ingest_travel_midwest_link_traffic

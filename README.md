@@ -91,11 +91,11 @@ After the account is approved, set `TRAVEL_MIDWEST_TRAFFIC_FEED_URL=https://trav
 python -m scripts.ingest_travel_midwest_link_traffic
 ```
 
-This job is intentionally **not scheduled or deployed yet**. Fixture tests do not contact the provider. A production timer should be added only after isolated PostgreSQL validation, one rate-compliant live smoke test, volume sizing, and confirmation of the desired collection interval. The provider archive contains the same report family at roughly five-minute intervals; only the past 24 hours are directly downloadable, while historical subsets require coordination with Travel Midwest.
+Manual ingestion is confirmed by operator-provided Ubuntu output: run 696 inserted 469 observations on October 2, 2026, Chicago time (October 3 UTC). An approved fifteen-minute pilot timer is now provided in `deploy/systemd/alternative-data-traffic.timer`; it requires explicit installation and verification on the server. It waits fifteen minutes after activation and after each completed run, retains the shared provider cooldown, and does not change the monthly camera or weekday market schedules. Follow the [traffic scheduling and verification steps](deploy/README.md#roadway-traffic-observations-fifteen-minute-pilot). Fixture tests do not contact the provider. The provider archive contains the same report family at roughly five-minute intervals; only the past 24 hours are directly downloadable, while historical subsets require coordination with Travel Midwest.
 
 ## Current status
 
-GDP, monthly camera-reference ingestion, and the 21-symbol market batch are deployed; the latest verified market batch completed all 21 symbols. The link-traffic adapter is implemented locally but is not yet validated on PostgreSQL or deployed. Camera images, weather, historical traffic backfill, point-in-time joins, revision history, monitoring/alerts, and tested off-host recovery remain incomplete.
+GDP, monthly camera-reference ingestion, and the 21-symbol market batch are deployed; the latest verified market batch completed all 21 symbols. The link-traffic adapter has successfully inserted observations into the Ubuntu PostgreSQL database during manual runs. Its fifteen-minute timer is supplied but automatic collection remains unverified until server installation and scheduled-run checks. Camera images, weather, historical traffic backfill, point-in-time joins, revision history, monitoring/alerts, and tested off-host recovery remain incomplete.
 
 ## Linux server operation
 
@@ -143,4 +143,4 @@ This builds a temporary image, checks its filesystem and a synthetic runtime con
 
 ## Next step
 
-Validate the link-traffic adapter in isolated PostgreSQL, perform one approved live smoke test, and size a narrow 2019+ historical pilot before enabling recurring traffic collection or modeling.
+Install and verify the approved fifteen-minute traffic timer, then measure data freshness, failures, and database growth after the first day and week. Historical traffic backfill and modeling remain separate work.

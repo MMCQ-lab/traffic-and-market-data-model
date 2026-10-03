@@ -1,0 +1,13 @@
+[Unit]
+Description=Collect roadway traffic with a fifteen-minute interval
+
+[Timer]
+# Wait after activation, including reboot, rather than immediately fetching.
+OnActiveSec=15min
+# Start the next interval when the previous run finishes, including failures.
+OnUnitInactiveSec=15min
+AccuracySec=1s
+Unit=alternative-data-traffic.service
+
+[Install]
+WantedBy=timers.target
