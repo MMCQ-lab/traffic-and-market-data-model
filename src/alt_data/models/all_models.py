@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from src.alt_data.database.base import Base
 
@@ -95,12 +95,23 @@ class RoadwaySensorObservation(CreatedAt, Base):
 
 class WeatherObservation(CreatedAt, Base):
     __tablename__ = "weather_observations"
+    __table_args__ = (
+        UniqueConstraint("source_id", "station_external_id", "observed_at", name="uq_weather_source_station_time"),
+        Index("ix_weather_observed_at", "observed_at"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     source_id: Mapped[int] = mapped_column(ForeignKey("data_sources.id"), nullable=False)
     station_external_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    station_name: Mapped[str | None] = mapped_column(String(150))
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     temperature_c: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    dewpoint_c: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    relative_humidity_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    wind_speed_kmh: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    wind_direction_deg: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    precipitation_last_hour_mm: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    conditions: Mapped[str | None] = mapped_column(String(150))
 
 
 class MarketPrice(CreatedAt, Base):

@@ -95,7 +95,7 @@ Manual ingestion is confirmed by operator-provided Ubuntu output: run 696 insert
 
 ## Current status
 
-GDP, monthly camera-reference ingestion, and the 21-symbol market batch are deployed; the latest verified market batch completed all 21 symbols. The link-traffic adapter has successfully inserted observations into the Ubuntu PostgreSQL database during manual runs. Its fifteen-minute timer is supplied but automatic collection remains unverified until server installation and scheduled-run checks. Camera images, weather, historical traffic backfill, point-in-time joins, revision history, monitoring/alerts, and tested off-host recovery remain incomplete.
+GDP, monthly camera-reference ingestion, and the 21-symbol market batch are deployed; the latest verified market batch completed all 21 symbols. The link-traffic adapter has successfully inserted observations into the Ubuntu PostgreSQL database during manual runs. Its fifteen-minute timer is supplied but automatic collection remains unverified until server installation and scheduled-run checks. A National Weather Service station-observation adapter (8 Chicagoland stations, 15-minute timer in `deploy/systemd/alternative-data-weather.timer`) is supplied and needs migration `0008_weather_station_fields` plus server installation. Camera images, historical traffic backfill, point-in-time joins, revision history, monitoring/alerts, and tested off-host recovery remain incomplete.
 
 ## Linux server operation
 

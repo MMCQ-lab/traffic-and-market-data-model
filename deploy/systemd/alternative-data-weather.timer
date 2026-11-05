@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect Chicagoland station weather with a fifteen-minute interval
+
+[Timer]
+# Same cadence as roadway traffic so the two series line up for joins.
+OnActiveSec=2min
+OnUnitInactiveSec=15min
+AccuracySec=1s
+Unit=alternative-data-weather.service
+
+[Install]
+WantedBy=timers.target

@@ -22,7 +22,8 @@ is not yet deployed.
 | Market data | Complete | 21-symbol daily OHLCV universe stored on the Ubuntu server |
 | Ubuntu hosting | Operational baseline | Docker PostgreSQL and ingestion container deployed; access is available over Tailscale/SSH |
 | Automatic schedules | Operational | Camera metadata monthly; weekday market timer after market close |
-| Weather and temporal joins | Not started | Phase 4 |
+| Weather | In progress | NWS station observations for 8 Chicagoland stations every 15 minutes (`scripts.ingest_nws_weather`); awaiting server installation |
+| Temporal joins | Not started | Phase 4 |
 | Camera image collection / YOLO | Not started | Deferred intentionally |
 
 ## What we built

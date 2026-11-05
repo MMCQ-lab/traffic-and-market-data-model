@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # Kept for backwards-compatible single-symbol runs.
     market_symbol: str = "SPY"
     market_start_date: str = "2010-01-01"
+    # National Weather Service station observations across Chicagoland.
+    weather_stations: str = "KORD,KMDW,KDPA,KLOT,KPWK,KARR,KGYY,KUGN"
+    weather_user_agent: str = "alternative-data-platform/0.1 (self-hosted weather research)"
+    weather_read_timeout_seconds: float = 20.0
     market_end_date: str | None = None
 
     @property

@@ -154,3 +154,14 @@ bash deploy/backup-postgres.sh
 The backup script never deletes or restores database data. Restore procedures are intentionally manual because restoring overwrites a database.
 
 PostgreSQL listens only on `127.0.0.1`, not the public network. For DBeaver, use an SSH tunnel to the server rather than opening port 5432 in the firewall.
+
+## Station weather observations (fifteen-minute)
+
+`scripts.ingest_nws_weather` stores the latest National Weather Service observation for each station in `WEATHER_STATIONS` (default `KORD,KMDW,KDPA,KLOT,KPWK,KARR,KGYY,KUGN`). Stations report about hourly, so most 15-minute runs skip repeats via the `(source, station, observed_at)` unique key. One failing station is logged and skipped; the run fails only if no station answers. No credentials are required.
+
+```bash
+docker compose --env-file .env -f docker-compose.server.yml run --rm ingestor alembic upgrade head
+docker compose --env-file .env -f docker-compose.server.yml run --rm -T ingestor python -m scripts.ingest_nws_weather
+sudo install -m 644 deploy/systemd/alternative-data-weather.service deploy/systemd/alternative-data-weather.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now alternative-data-weather.timer
+```
