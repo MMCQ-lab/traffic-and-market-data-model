@@ -17,7 +17,7 @@ def main() -> int:
             forbidden.append(f"/app/{name}")
     if forbidden:
         raise RuntimeError("Forbidden image paths: " + ", ".join(sorted(set(forbidden))))
-    for name in ("src/alt_data/ingestion/base.py", "alembic.ini", "requirements.txt", "alembic/versions/0007_camera_created_at.py"):
+    for name in ("src/alt_data/ingestion/base.py", "alembic.ini", "requirements.txt", "alembic/versions/0008_weather_station_fields.py"):
         if not (Path("/app") / name).is_file():
             raise RuntimeError(f"Missing runtime file: {name}")
     print("Image exclusions and required runtime files verified")
